@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Watercolor Canvas</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { canvas: '#f0eeea' },
+          boxShadow: {
+            toolbar: '0 4px 28px rgba(0,0,0,0.10), 0 1px 6px rgba(0,0,0,0.06)',
+            tool: '0 2px 8px rgba(0,0,0,0.10)',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { width: 100vw; height: 100vh; overflow: hidden; }
+    #root { width: 100%; height: 100%; }
+    button { border: none; background: none; cursor: pointer; padding: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+    // ─── Palette ────────────────────────────────────────────
+    const PALETTE = [
+      { id: 'blush',      hex: '#f4b8cc' },
+      { id: 'pink',       hex: '#df7b8e' },
+      { id: 'green',      hex: '#62a860' },
+      { id: 'dark-green', hex: '#2d5e3a' },
+    ];
+
+    // ─── Canvas Utilities ────────────────────────────────────
+
+    /** '#rrggbb' → { r, g, b } */
+    function hexToRgb(hex) {
+      const n = parseInt(hex.replace('#', ''), 16);
+      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+    }
+
+    /** Base stamp radius mapped to toolbar brush-size id */
+    const SIZE_RADIUS = { xs: 8, sm: 16, md: 28, lg: 44 };
+
+    /**
+     * createPigmentBlob(rgb, radius, seed)
+     * Three-pass organic watercolor stamp rendered onto an offscreen canvas:
+     *   Pass 1 — diffuse outer halo (simulates water bleeding)
+     *   Pass 2 — nine jittered body lobes (organic, feathered edge)
+     *   Pass 3 — pigment-pooling ring at the boundary (darker edge)
+     */
+    function createPigmentBlob(rgb, radius, seed) {
+      const pad  = Math.ceil(radius * 0.4);
+      const size = (radius + pad) * 2;
+      const cv   = document.createElement('canvas');
+      cv.width   = size;
+      cv.height  = size;
+      const ctx  = cv.getContext('2d');
+      const cx   = size / 2;
+      const cy   = size / 2;
+      const { r, g, b } = rgb;
+
+      // Seeded LCG — reproducible per seed, varied across seeds
+      let lc = (seed * 9301 + 49297) % 233280;
+      const rand = () => { lc = (lc * 9301 + 49297) % 233280; return lc / 233280; };
+
+      // Pass 1: halo
+      const h = ctx.createRadialGradient(cx, cy, radius * 0.4, cx, cy, radius * 1.3);
+      h.addColorStop(0,    `rgba(${r},${g},${b},0)`);
+      h.addColorStop(0.55, `rgba(${r},${g},${b},0.018)`);
+      h.addColorStop(1,    `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = h;
+      ctx.beginPath(); ctx.arc(cx, cy, radius * 1.3, 0, Math.PI * 2); ctx.fill();
+
+      // Pass 2: body lobes
+      for (let i = 0; i < 9; i++) {
+        const angle = (i / 9) * Math.PI * 2 + rand() * 0.9;
+        const ox    = Math.cos(angle) * radius * 0.2 * rand();
+        const oy    = Math.sin(angle) * radius * 0.2 * rand();
+        const lr    = radius * (0.52 + rand() * 0.42);
+        const lgrad = ctx.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, lr);
+        lgrad.addColorStop(0,    `rgba(${r},${g},${b},0.09)`);
+        lgrad.addColorStop(0.55, `rgba(${r},${g},${b},0.04)`);
+        lgrad.addColorStop(1,    `rgba(${r},${g},${b},0)`);
+        ctx.fillStyle = lgrad;
+        ctx.beginPath(); ctx.arc(cx + ox, cy + oy, lr, 0, Math.PI * 2); ctx.fill();
+      }
+
+      // Pass 3: edge pooling ring
+      const eg = ctx.createRadialGradient(cx, cy, radius * 0.45, cx, cy, radius);
+      eg.addColorStop(0,    `rgba(${r},${g},${b},0)`);
+      eg.addColorStop(0.65, `rgba(${r},${g},${b},0.03)`);
+      eg.addColorStop(1,    `rgba(${r},${g},${b},0.10)`);
+      ctx.fillStyle = eg;
+      ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.fill();
+
+      return cv;
+    }
+
+    // ─── useWatercolorCanvas hook ─────────────────────────────
+    /**
+     * Drives all drawing on the canvas ref.
+     *
+     * Tools:
+     *   fork   → watercolor stamp  (multiply composite, velocity pressure)
+     *   pencil → smooth lineTo     (opaque, thin)
+     *   eraser → destination-out   (restores transparency / reveals paper grid)
+     *
+     * All mutable state lives in refs so the stable useCallback handlers
+     * never capture stale closure values.
+     */
+    function useWatercolorCanvas(canvasRef, { activeTool, activeColor, brushSize }) {
+      const toolRef  = useRef(activeTool);
+      const colorRef = useRef(activeColor);
+      const sizeRef  = useRef(brushSize);
+      useEffect(() => { toolRef.current  = activeTool;  }, [activeTool]);
+      useEffect(() => { colorRef.current = activeColor; }, [activeColor]);
+      useEffect(() => { sizeRef.current  = brushSize;   }, [brushSize]);
+
+      // Pool: Map<"radius_r_g_b", Canvas[]> — 5 organic variants per key
+      const blobPool = useRef(new Map());
+
+      const ds = useRef({        // drawing state
+        isDrawing:    false,
+        positions:    [],        // { x, y, t } — last 8, for velocity
+        lastStampPos: null,      // last watercolor stamp anchor
+        lastLinePos:  null,      // last pencil / eraser anchor
+      });
+
+      // ── Resize canvas, preserve content ────────────────────
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const resize = () => {
+          const tmp = document.createElement('canvas');
+          tmp.width  = canvas.width;
+          tmp.height = canvas.height;
+          if (canvas.width > 0 && canvas.height > 0)
+            tmp.getContext('2d').drawImage(canvas, 0, 0);
+          canvas.width  = canvas.offsetWidth;
+          canvas.height = canvas.offsetHeight;
+          if (tmp.width > 0) canvas.getContext('2d').drawImage(tmp, 0, 0);
+        };
+        resize();
+        const ro = new ResizeObserver(resize);
+        ro.observe(canvas);
+        return () => ro.disconnect();
+      }, [canvasRef]);
+
+      // ── Blob pool access ────────────────────────────────────
+      const getBlob = (radius, rgb) => {
+        const key = `${radius}_${rgb.r}_${rgb.g}_${rgb.b}`;
+        if (!blobPool.current.has(key))
+          blobPool.current.set(key,
+            Array.from({ length: 5 }, (_, i) => createPigmentBlob(rgb, radius, i + 1))
+          );
+        const pool = blobPool.current.get(key);
+        return pool[Math.floor(Math.random() * pool.length)];
+      };
+
+      // ── Velocity → simulated pressure (0..1) ───────────────
+      const getPressure = (e) => {
+        if (e.pressure > 0 && e.pressure < 1) return e.pressure;
+        const pts = ds.current.positions;
+        if (pts.length < 2) return 0.5;
+        const a = pts[pts.length - 2], b = pts[pts.length - 1];
+        const vel = Math.hypot(b.x - a.x, b.y - a.y) / Math.max(b.t - a.t, 1);
+        // fast stroke → thin/light; slow stroke → thick/heavy
+        return Math.max(0.08, Math.min(1, 1 - vel / 2.0));
+      };
+
+      const getPos = (e) => {
+        const rect = canvasRef.current.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top, t: performance.now() };
+      };
+
+      // ── Watercolor stamp ────────────────────────────────────
+      const stampWatercolor = (ctx, x, y, pressure, rgb) => {
+        const baseR  = SIZE_RADIUS[sizeRef.current] ?? 16;
+        const stampR = Math.max(4, Math.round(baseR * (0.45 + pressure * 0.85)));
+        const alpha  = 0.04 + pressure * 0.10;
+
+        const blob = getBlob(stampR, rgb);
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = alpha;
+        ctx.drawImage(blob, x - blob.width / 2, y - blob.height / 2);
+        ctx.restore();
+      };
+
+      // ── Pencil line ─────────────────────────────────────────
+      const drawPencilLine = (ctx, from, to, rgb) => {
+        const lw = Math.max(1, (SIZE_RADIUS[sizeRef.current] ?? 16) * 0.18);
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha  = 0.88;
+        ctx.strokeStyle  = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+        ctx.lineWidth    = lw;
+        ctx.lineCap      = 'round';
+        ctx.lineJoin     = 'round';
+        ctx.beginPath();
+        ctx.moveTo(from.x, from.y);
+        ctx.lineTo(to.x, to.y);
+        ctx.stroke();
+        ctx.restore();
+      };
+
+      // ── Eraser ──────────────────────────────────────────────
+      const eraseAt = (ctx, x, y) => {
+        const radius = (SIZE_RADIUS[sizeRef.current] ?? 16) * 1.4;
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(0,0,0,1)';
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      };
+
+      // ── onPointerDown ───────────────────────────────────────
+      const onPointerDown = useCallback((e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        blobPool.current.clear();   // regenerate blobs (color/size may have changed)
+
+        const pos  = getPos(e);
+        const tool = toolRef.current;
+        const rgb  = hexToRgb(colorRef.current);
+        const ctx  = canvasRef.current.getContext('2d');
+
+        ds.current.isDrawing    = true;
+        ds.current.positions    = [pos];
+        ds.current.lastStampPos = { x: pos.x, y: pos.y };
+        ds.current.lastLinePos  = { x: pos.x, y: pos.y };
+
+        if (tool === 'fork') {
+          stampWatercolor(ctx, pos.x, pos.y, e.pressure > 0 ? e.pressure : 0.5, rgb);
+        } else if (tool === 'pencil') {
+          const lw = Math.max(1, (SIZE_RADIUS[sizeRef.current] ?? 16) * 0.18);
+          ctx.save();
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha  = 0.88;
+          ctx.fillStyle    = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+          ctx.beginPath();
+          ctx.arc(pos.x, pos.y, lw / 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        } else if (tool === 'eraser') {
+          eraseAt(ctx, pos.x, pos.y);
+        }
+      }, []);
+
+      // ── onPointerMove ───────────────────────────────────────
+      const onPointerMove = useCallback((e) => {
+        if (!ds.current.isDrawing) return;
+
+        const pos  = getPos(e);
+        const pts  = ds.current.positions;
+        pts.push(pos);
+        if (pts.length > 8) pts.shift();
+
+        const tool = toolRef.current;
+        const rgb  = hexToRgb(colorRef.current);
+        const ctx  = canvasRef.current.getContext('2d');
+
+        if (tool === 'fork') {
+          const pressure = getPressure(e);
+          const baseR    = SIZE_RADIUS[sizeRef.current] ?? 16;
+          const stampR   = baseR * (0.45 + pressure * 0.85);
+          const spacing  = Math.max(2, stampR * 0.28);
+
+          const last = ds.current.lastStampPos;
+          const dx = pos.x - last.x, dy = pos.y - last.y;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist >= spacing) {
+            const steps = Math.ceil(dist / spacing);
+            for (let i = 1; i <= steps; i++) {
+              const t = i / steps;
+              stampWatercolor(ctx, last.x + dx * t, last.y + dy * t, pressure, rgb);
+            }
+            ds.current.lastStampPos = { x: pos.x, y: pos.y };
+          }
+
+        } else if (tool === 'pencil') {
+          const last = ds.current.lastLinePos;
+          drawPencilLine(ctx, last, pos, rgb);
+          ds.current.lastLinePos = { x: pos.x, y: pos.y };
+
+        } else if (tool === 'eraser') {
+          const last   = ds.current.lastLinePos;
+          const dx     = pos.x - last.x, dy = pos.y - last.y;
+          const dist   = Math.hypot(dx, dy);
+          const radius = (SIZE_RADIUS[sizeRef.current] ?? 16) * 1.4;
+          const spacing = Math.max(2, radius * 0.5);
+
+          if (dist >= spacing) {
+            const steps = Math.ceil(dist / spacing);
+            for (let i = 1; i <= steps; i++) {
+              const t = i / steps;
+              eraseAt(ctx, last.x + dx * t, last.y + dy * t);
+            }
+            ds.current.lastLinePos = { x: pos.x, y: pos.y };
+          }
+        }
+      }, []);
+
+      const onPointerUp = useCallback(() => {
+        ds.current.isDrawing = false;
+        ds.current.positions = [];
+      }, []);
+
+      return { onPointerDown, onPointerMove, onPointerUp };
+    }
+
+    // ─── WatercolorCanvas component ───────────────────────────
+    function WatercolorCanvas({ activeTool, activeColor, brushSize }) {
+      const canvasRef = useRef(null);
+      const { onPointerDown, onPointerMove, onPointerUp } =
+        useWatercolorCanvas(canvasRef, { activeTool, activeColor, brushSize });
+
+      const cursor =
+        activeTool === 'eraser'  ? 'cell'      :
+        activeTool === 'fork'    ? 'crosshair'  :
+        /* pencil */               'crosshair';
+
+      return (
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full"
+          style={{
+            display:      'block',
+            background:   'transparent',
+            mixBlendMode: 'multiply',
+            cursor,
+            touchAction:  'none',
+          }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+        />
+      );
+    }
+
+    // ─── SVG Icons ──────────────────────────────────────────
+
+    /** Cream pencil with a colored tip, designed to float above the bar */
+    function PencilSVG({ tipColor = '#4a7c55' }) {
+      return (
+        <svg width="24" height="80" viewBox="0 0 24 80" fill="none">
+          {/* Tip / graphite point */}
+          <polygon points="12,0 16.5,18 7.5,18" fill={tipColor} />
+          {/* Wood cone */}
+          <polygon points="12,14 16.5,22 7.5,22" fill="#c8a86a" />
+          {/* Body — main cream rectangle */}
+          <rect x="7.5" y="22" width="9" height="38" fill="#f0e8d2" />
+          {/* Subtle label band */}
+          <rect x="7.5" y="32" width="9" height="10" fill="#e8dfc4" />
+          {/* Ferrule (metal band) */}
+          <rect x="6.5" y="60" width="11" height="6" rx="1" fill="#c0bba8" />
+          {/* Eraser cap */}
+          <rect x="7.5" y="66" width="9" height="10" rx="1.5" fill="#e8c0bc" />
+          {/* Highlight on body */}
+          <rect x="8.5" y="23" width="2" height="36" rx="1" fill="rgba(255,255,255,0.4)" />
+        </svg>
+      );
+    }
+
+    /** ψ-shaped fork / selector tool */
+    function ForkSVG() {
+      return (
+        <svg width="26" height="26" viewBox="0 0 26 26" fill="none"
+             stroke="#909090" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {/* two prongs */}
+          <line x1="9"  y1="3" x2="9"  y2="10" />
+          <line x1="17" y1="3" x2="17" y2="10" />
+          {/* arch connecting prongs */}
+          <path d="M9 10 Q9 16 13 16 Q17 16 17 10" />
+          {/* stem */}
+          <line x1="13" y1="16" x2="13" y2="23" />
+        </svg>
+      );
+    }
+
+    /** Pink rectangular eraser — protrudes above the bar */
+    function EraserSVG() {
+      return (
+        <svg width="26" height="52" viewBox="0 0 26 52" fill="none">
+          {/* body */}
+          <rect x="3" y="5" width="20" height="40" rx="2.5" fill="#f0a0b4" />
+          {/* top darker band (like a real eraser wrapper) */}
+          <rect x="3" y="5"  width="20" height="10" rx="2.5" fill="#e88aa0" />
+          {/* bottom lighter cap */}
+          <rect x="3" y="38" width="20" height="7"  rx="0 0 2.5 2.5" fill="#e896aa" />
+          {/* brand text */}
+          <text x="13" y="28" textAnchor="middle" fontSize="5.5" fontFamily="Arial" fontWeight="700"
+                fill="#c07080" letterSpacing="0.5">AVAN</text>
+          {/* highlight */}
+          <rect x="5" y="6" width="3" height="38" rx="1.5" fill="rgba(255,255,255,0.25)" />
+        </svg>
+      );
+    }
+
+    /** Brush-size swoosh icons — progressively larger */
+    function BrushSizeSVG({ size }) {
+      if (size === 'xs') {
+        // Two small dots
+        return (
+          <svg width="22" height="22" viewBox="0 0 22 22">
+            <circle cx="8"  cy="11" r="1.8" fill="#888" />
+            <circle cx="15" cy="11" r="1.8" fill="#888" />
+          </svg>
+        );
+      }
+      if (size === 'sm') {
+        // Small swoosh / cursive "a"
+        return (
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+            <path
+              d="M5 20 C5 14 9 8 13 12 C15 14 14 18 12 19 C10 20 8 18 9 16 C10 13 13 13 15 15 C17 17 17 20 19 18"
+              stroke="#777" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+      if (size === 'md') {
+        // Medium bold swoosh
+        return (
+          <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+            <path
+              d="M4 21 C4 13 9 6 14 11 C17 14 15 19 12 20 C9 21 7 18 8 15 C9 11 13 11 16 14 C19 17 19 21 22 18"
+              stroke="#555" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"
+            />
+          </svg>
+        );
+      }
+      // lg — large bold swoosh
+      return (
+        <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+          <path
+            d="M3 21 C3 12 9 5 14 11 C17 14 15 20 11 21 C8 22 6 18 7 15 C9 10 14 10 17 14 C20 18 20 22 24 18"
+            stroke="#333" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round"
+          />
+        </svg>
+      );
+    }
+
+    /** Top-right paintbrush icon */
+    function TopBrushSVG() {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+             stroke="#aaa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z"/>
+          <path d="M20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+        </svg>
+      );
+    }
+
+    /** Top-right download icon */
+    function DownloadSVG() {
+      return (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+             stroke="#aaa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="3" />
+          <polyline points="8 12 12 16 16 12" />
+          <line x1="12" y1="8" x2="12" y2="16" />
+        </svg>
+      );
+    }
+
+    // ─── TopBar ──────────────────────────────────────────────
+    function TopBar() {
+      return (
+        <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-5 py-4 z-10">
+          {/* Back arrow */}
+          <button
+            className="w-8 h-8 flex items-center justify-center rounded-full transition-colors hover:bg-black/5"
+            title="Back"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                 stroke="#aaa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+
+          {/* Right utility icons */}
+          <div className="flex items-center gap-2">
+            <button
+              className="w-9 h-9 flex items-center justify-center rounded-full transition-colors hover:bg-black/5"
+              title="Paintbrush"
+            >
+              <TopBrushSVG />
+            </button>
+            <button
+              className="w-9 h-9 flex items-center justify-center rounded-full transition-colors hover:bg-black/5"
+              title="Download"
+            >
+              <DownloadSVG />
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── BottomToolbar ────────────────────────────────────────
+    function BottomToolbar({ activeTool, setActiveTool, activeColor, setActiveColor, brushSize, setBrushSize }) {
+
+      const toolBtn = (id, title, children, extraClass = '') =>
+        <button
+          key={id}
+          onClick={() => setActiveTool(id)}
+          title={title}
+          className={`
+            flex items-center justify-center rounded-xl transition-colors
+            ${activeTool === id ? 'bg-black/[0.07]' : 'hover:bg-black/[0.04]'}
+            ${extraClass}
+          `}
+        >
+          {children}
+        </button>;
+
+      return (
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-0">
+
+          {/* ── Main toolbar bar ── */}
+          <div
+            className="flex items-center gap-0.5 px-2.5 py-2 rounded-2xl"
+            style={{
+              background: 'rgba(255,255,255,0.93)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+              boxShadow: '0 6px 32px rgba(0,0,0,0.10), 0 1px 6px rgba(0,0,0,0.07)',
+              border: '1px solid rgba(0,0,0,0.06)',
+            }}
+          >
+
+            {/* ── PENCIL (floats above bar) ── */}
+            <button
+              onClick={() => setActiveTool('pencil')}
+              title="Pencil"
+              className={`
+                relative flex items-end justify-center w-12 rounded-xl transition-colors pb-1
+                ${activeTool === 'pencil' ? 'bg-black/[0.06]' : 'hover:bg-black/[0.04]'}
+              `}
+              style={{ height: '56px', marginTop: '-34px' }}
+            >
+              <PencilSVG tipColor={activeColor} />
+            </button>
+
+            {/* ── FORK selector ── */}
+            {toolBtn('fork', 'Select', <ForkSVG />, 'w-11 h-11')}
+
+            {/* ── ERASER (protrudes slightly) ── */}
+            <button
+              onClick={() => setActiveTool('eraser')}
+              title="Eraser"
+              className={`
+                flex items-end justify-center w-11 rounded-xl transition-colors pb-1
+                ${activeTool === 'eraser' ? 'bg-black/[0.06]' : 'hover:bg-black/[0.04]'}
+              `}
+              style={{ height: '56px', marginTop: '-16px' }}
+            >
+              <EraserSVG />
+            </button>
+
+            {/* ── Divider ── */}
+            <div className="w-px h-7 bg-black/10 mx-1.5 self-center" />
+
+            {/* ── COLOR SWATCHES ── */}
+            <div
+              className="flex items-center overflow-hidden self-center"
+              style={{ borderRadius: '8px', height: '30px' }}
+            >
+              {PALETTE.map((p, i) => (
+                <button
+                  key={p.id}
+                  onClick={() => setActiveColor(p.hex)}
+                  title={p.id}
+                  className="transition-transform hover:scale-y-110 origin-center"
+                  style={{
+                    width: '30px',
+                    height: '30px',
+                    background: p.hex,
+                    borderRadius:
+                      i === 0 ? '7px 0 0 7px'
+                      : i === PALETTE.length - 1 ? '0 7px 7px 0'
+                      : '0',
+                    outline: activeColor === p.hex
+                      ? '2.5px solid rgba(0,0,0,0.35)'
+                      : '0',
+                    outlineOffset: '-2px',
+                    position: 'relative',
+                    zIndex: activeColor === p.hex ? 1 : 0,
+                  }}
+                />
+              ))}
+            </div>
+
+            {/* ── Divider ── */}
+            <div className="w-px h-7 bg-black/10 mx-1.5 self-center" />
+
+            {/* ── BRUSH SIZES ── */}
+            {(['xs', 'sm', 'md', 'lg']).map(sz => (
+              <button
+                key={sz}
+                onClick={() => setBrushSize(sz)}
+                title={`Brush size: ${sz}`}
+                className={`
+                  w-11 h-11 flex items-center justify-center rounded-xl transition-colors self-center
+                  ${brushSize === sz ? 'bg-black/[0.07]' : 'hover:bg-black/[0.04]'}
+                `}
+              >
+                <BrushSizeSVG size={sz} />
+              </button>
+            ))}
+
+          </div>
+        </div>
+      );
+    }
+
+    // ─── App ─────────────────────────────────────────────────
+    function App() {
+      const [activeTool,  setActiveTool]  = useState('pencil');
+      const [activeColor, setActiveColor] = useState('#df7b8e');
+      const [brushSize,   setBrushSize]   = useState('sm');
+
+      return (
+        <div
+          className="relative w-screen h-screen overflow-hidden select-none"
+          style={{
+            /* Warm off-white paper base */
+            backgroundColor: '#eeece8',
+            /* Subtle dot grid — cold-press paper feel */
+            backgroundImage: `radial-gradient(circle, #c8c3ba 1.2px, transparent 1.2px)`,
+            backgroundSize: '24px 24px',
+          }}
+        >
+          <TopBar />
+
+          <WatercolorCanvas activeTool={activeTool} activeColor={activeColor} brushSize={brushSize} />
+
+          <BottomToolbar
+            activeTool={activeTool}   setActiveTool={setActiveTool}
+            activeColor={activeColor} setActiveColor={setActiveColor}
+            brushSize={brushSize}     setBrushSize={setBrushSize}
+          />
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

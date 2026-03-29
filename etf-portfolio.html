@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Custom ETF Portfolio</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-outer: #e8e4de;
+      --white: #ffffff;
+      --black: #111111;
+      --card-bg: #f2f1ef;
+      --gray2: #e6e4e0;
+      --gray3: #c8c5c0;
+      --gray4: #8a8784;
+      --text: #111111;
+      --sub: #8a8784;
+      --pink: #e0a0d4;
+      --pink-bg: rgba(210,140,220,0.18);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      background: var(--bg-outer);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+
+    /* ── Phone shell ── */
+    .phone {
+      width: 390px;
+      background: var(--white);
+      border-radius: 44px; overflow: hidden;
+      box-shadow: 0 32px 80px rgba(0,0,0,0.16), 0 0 0 1px rgba(0,0,0,0.05);
+      display: flex; flex-direction: column;
+    }
+
+    /* ── Status bar ── */
+    .status-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 16px 28px 0; flex-shrink: 0;
+    }
+    .status-bar .time { font-size: 15px; font-weight: 600; letter-spacing: -0.2px; }
+    .status-icons { display: flex; gap: 6px; align-items: center; }
+    .status-icons svg { fill: var(--black); }
+
+    /* ── Nav ── */
+    .nav-bar {
+      display: flex; align-items: center; justify-content: center;
+      padding: 10px 20px 12px; position: relative; flex-shrink: 0;
+    }
+    .nav-title { font-size: 17px; font-weight: 600; letter-spacing: -0.2px; }
+    .nav-btn {
+      position: absolute; left: 18px;
+      background: none; border: none; cursor: pointer;
+      font-size: 22px; color: var(--black); padding: 4px 8px;
+      border-radius: 8px; transition: background 0.15s; line-height: 1;
+    }
+    .nav-btn:hover { background: var(--card-bg); }
+
+    /* ── Screen ── */
+    .screen { display: none; flex-direction: column; flex: 1; overflow: hidden; }
+    .screen.active { display: flex; }
+
+    /* ════════════════════════
+       SCREEN 1 — Choose Assets
+    ════════════════════════ */
+    .tabs-wrap { overflow-x: auto; flex-shrink: 0; padding: 2px 16px 10px; scrollbar-width: none; }
+    .tabs-wrap::-webkit-scrollbar { display: none; }
+    .tabs { display: flex; gap: 6px; width: max-content; }
+    .tab {
+      padding: 7px 15px; border-radius: 20px; border: none;
+      background: transparent; font-size: 14px; font-weight: 500;
+      color: var(--sub); cursor: pointer; white-space: nowrap; transition: all 0.15s;
+    }
+    .tab.active { background: var(--gray2); color: var(--black); font-weight: 600; }
+    .tab:hover:not(.active) { background: var(--card-bg); }
+
+    .asset-list { flex: 1; overflow-y: auto; scrollbar-width: none; }
+    .asset-list::-webkit-scrollbar { display: none; }
+    .asset-row {
+      display: flex; align-items: center; gap: 14px; padding: 13px 18px;
+      cursor: pointer; transition: background 0.12s;
+      border-bottom: 1px solid var(--gray2); position: relative;
+    }
+    .asset-row:last-child { border-bottom: none; }
+    .asset-row:hover { background: var(--card-bg); }
+    .asset-row.selected { background: #fafaf8; }
+    .asset-row.selected::before {
+      content: ''; position: absolute; inset: 4px 12px;
+      border: 1.5px solid var(--gray2); border-radius: 12px; pointer-events: none;
+    }
+    .asset-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; font-size: 22px;
+    }
+    .asset-info { flex: 1; }
+    .asset-name { font-size: 15px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 4px; }
+    .info-icon { font-size: 11px; color: var(--gray3); }
+    .asset-return { font-size: 13px; color: var(--sub); margin-top: 2px; }
+    .checkbox {
+      width: 24px; height: 24px; border-radius: 50%; border: 1.5px solid var(--gray3);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: all 0.15s;
+    }
+    .asset-row.selected .checkbox { background: var(--black); border-color: var(--black); }
+    .checkbox-check { display: none; color: white; font-size: 11px; font-weight: 700; }
+    .asset-row.selected .checkbox-check { display: block; }
+
+    .bottom-bar {
+      flex-shrink: 0; padding: 10px 16px 22px;
+      background: var(--white); box-shadow: 0 -1px 0 var(--gray2);
+    }
+    .selected-chips { display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none; padding-bottom: 10px; }
+    .selected-chips:empty { display: none; }
+    .selected-chips::-webkit-scrollbar { display: none; }
+    .chip { display: flex; flex-direction: column; align-items: center; gap: 3px; flex-shrink: 0; }
+    .chip-icon { width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+    .chip-label { font-size: 11px; color: var(--sub); }
+
+    .cta-btn {
+      width: 100%; height: 54px; border-radius: 27px; border: none;
+      background: var(--black); color: white; font-size: 16px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .cta-btn:disabled { background: var(--gray2); color: var(--gray3); cursor: default; }
+    .cta-btn:not(:disabled):hover { opacity: 0.85; }
+    .cta-btn:not(:disabled):active { transform: scale(0.98); }
+
+    /* ════════════════════════
+       SCREEN 2 — Set Allocation
+    ════════════════════════ */
+
+    /* Progress bar */
+    .progress-wrap { padding: 4px 20px 0; flex-shrink: 0; }
+    .progress-bar {
+      height: 13px; border-radius: 7px; overflow: hidden;
+      display: flex; background: var(--gray2);
+    }
+    .progress-seg {
+      height: 100%;
+      transition: width 0.3s cubic-bezier(0.4,0,0.2,1);
+    }
+
+    /* Legend */
+    .progress-legend {
+      display: flex; gap: 14px; padding: 7px 20px 0;
+      flex-shrink: 0; flex-wrap: wrap;
+    }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--sub); }
+    .legend-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+
+    /* Stats row */
+    .stats-row {
+      display: flex; gap: 10px; padding: 14px 20px 0; flex-shrink: 0;
+    }
+    .stat-card {
+      flex: 1; background: var(--card-bg); border-radius: 14px; padding: 14px 16px;
+    }
+    .stat-label {
+      font-size: 13px; color: var(--sub);
+      display: flex; align-items: center; gap: 4px; margin-bottom: 6px;
+    }
+    .stat-val { font-size: 22px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
+    .risk-dots { display: flex; gap: 5px; margin-top: 4px; }
+    .risk-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--gray3); }
+    .risk-dot.on { background: var(--black); }
+
+    /* Assets header */
+    .assets-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 20px 10px; flex-shrink: 0;
+    }
+    .assets-title { font-size: 20px; font-weight: 700; letter-spacing: -0.3px; }
+    .expand-btn {
+      background: none; border: none; cursor: pointer; padding: 4px;
+      color: var(--black); border-radius: 6px; transition: background 0.15s;
+      font-size: 16px;
+    }
+    .expand-btn:hover { background: var(--card-bg); }
+
+    /* Cards scroll */
+    .alloc-scroll { flex: 1; overflow-y: auto; padding: 0 16px 8px; scrollbar-width: none; }
+    .alloc-scroll::-webkit-scrollbar { display: none; }
+
+    /* Asset card */
+    .alloc-card {
+      background: var(--white); border: 1px solid var(--gray2);
+      border-radius: 18px; padding: 16px 16px 14px;
+      margin-bottom: 10px;
+    }
+
+    .alloc-card-top { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .alloc-card-icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; flex-shrink: 0;
+    }
+    .alloc-card-info { flex: 1; }
+    .alloc-card-name { font-size: 16px; font-weight: 600; letter-spacing: -0.2px; }
+    .alloc-card-cat { font-size: 13px; color: var(--sub); margin-top: 2px; }
+    .trash-btn {
+      width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--gray2);
+      background: var(--white); cursor: pointer; color: var(--gray3);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; transition: all 0.15s; flex-shrink: 0;
+    }
+    .trash-btn:hover { background: #fdecea; color: #d04040; border-color: #f0c0c0; }
+
+    /* Slider row */
+    .alloc-card-row {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .step-sym {
+      font-size: 22px; font-weight: 300; color: var(--black);
+      cursor: pointer; padding: 0 2px; user-select: none;
+      flex-shrink: 0; transition: opacity 0.15s;
+      background: none; border: none; line-height: 1;
+    }
+    .step-sym:hover { opacity: 0.5; }
+    .step-sym:active { opacity: 0.3; }
+
+    .slider-wrap { flex: 1; position: relative; height: 28px; }
+    .alloc-slider {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      width: 100%; -webkit-appearance: none; appearance: none;
+      height: 3px; border-radius: 2px; outline: none; cursor: pointer;
+    }
+    .alloc-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 28px; height: 28px; border-radius: 50%;
+      background: white;
+      border: none;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.20), 0 0 0 1px rgba(0,0,0,0.06);
+      cursor: pointer; transition: transform 0.1s;
+    }
+    .alloc-slider::-webkit-slider-thumb:active { transform: scale(1.12); }
+    .alloc-slider::-moz-range-thumb {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: white; border: none;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.20);
+      cursor: pointer;
+    }
+
+    .pct-box {
+      min-width: 68px; height: 40px; border-radius: 10px;
+      background: var(--card-bg); border: 1px solid var(--gray2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; font-weight: 700; color: var(--text);
+      flex-shrink: 0; letter-spacing: -0.3px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Bottom bar */
+    .alloc-bottom {
+      flex-shrink: 0; padding: 12px 20px 22px;
+      background: var(--white); box-shadow: 0 -1px 0 var(--gray2);
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    }
+    .alloc-status {
+      font-size: 14px; font-weight: 500; color: var(--sub);
+      transition: color 0.25s;
+    }
+    .alloc-status.complete { color: #2eaa6e; }
+    .alloc-status.over     { color: #d04040; }
+
+    .next-btn {
+      height: 50px; padding: 0 32px; border-radius: 25px; border: none;
+      background: var(--black); color: white; font-size: 16px; font-weight: 600;
+      cursor: pointer; transition: all 0.2s; white-space: nowrap; flex-shrink: 0;
+    }
+    .next-btn:disabled { background: var(--gray2); color: var(--gray3); cursor: default; }
+    .next-btn:not(:disabled):hover { opacity: 0.85; }
+    .next-btn:not(:disabled):active { transform: scale(0.96); }
+
+    /* Home indicator */
+    .home-indicator { height: 30px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .home-indicator div { width: 130px; height: 5px; background: var(--black); border-radius: 3px; opacity: 0.15; }
+  </style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <span class="time">9:41</span>
+    <div class="status-icons">
+      <svg width="17" height="12" viewBox="0 0 17 12"><rect x="0" y="3" width="3" height="9" rx="1"/><rect x="4.5" y="2" width="3" height="10" rx="1"/><rect x="9" y="0.5" width="3" height="11.5" rx="1"/><rect x="13.5" y="0" width="3" height="12" rx="1" opacity="0.3"/></svg>
+      <svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 2.4C5.8 2.4 3.8 3.3 2.3 4.8L0 2.5C2.1 0.9 4.9 0 8 0s5.9.9 8 2.5L13.7 4.8C12.2 3.3 10.2 2.4 8 2.4z" opacity="0.3"/><path d="M8 5.2c-1.6 0-3 .6-4.1 1.6L1.6 4.6C3.1 3.3 5.4 2.5 8 2.5s4.9.8 6.4 2.1L12.1 6.8C11 5.8 9.6 5.2 8 5.2z" opacity="0.6"/><path d="M8 8c-.9 0-1.8.4-2.4 1L8 12l2.4-3C9.8 8.4 8.9 8 8 8z"/></svg>
+      <svg width="25" height="12" viewBox="0 0 25 12"><rect x="0" y="1" width="22" height="10" rx="3.5" stroke="#111" stroke-width="1" fill="none"/><rect x="1.5" y="2.5" width="18" height="7" rx="2" fill="#111"/><rect x="23" y="3.5" width="2" height="5" rx="1" fill="#111" opacity="0.4"/></svg>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN 1: Choose Assets ══ -->
+  <div class="screen active" id="screen-choose">
+    <div class="nav-bar">
+      <button class="nav-btn" onclick="closeApp()">‹</button>
+      <span class="nav-title">Choose assets</span>
+    </div>
+    <div class="tabs-wrap"><div class="tabs" id="tabs"></div></div>
+    <div class="asset-list" id="asset-list"></div>
+    <div class="bottom-bar">
+      <div class="selected-chips" id="selected-chips"></div>
+      <button class="cta-btn" id="next-btn" disabled onclick="goToAllocation()">Next</button>
+    </div>
+  </div>
+
+  <!-- ══ SCREEN 2: Set Allocation ══ -->
+  <div class="screen" id="screen-alloc">
+    <div class="nav-bar">
+      <button class="nav-btn" onclick="goBack()">‹</button>
+      <span class="nav-title">Set allocation</span>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="progress-wrap">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    <div class="progress-legend" id="progress-legend"></div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Est. Return <span style="font-size:11px;color:var(--gray3)">ⓘ</span></div>
+        <div class="stat-val" id="stat-return">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Risk <span style="font-size:11px;color:var(--gray3)">ⓘ</span></div>
+        <div class="risk-dots" id="risk-dots">
+          <div class="risk-dot"></div><div class="risk-dot"></div>
+          <div class="risk-dot"></div><div class="risk-dot"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assets header -->
+    <div class="assets-header">
+      <span class="assets-title">Assets</span>
+      <button class="expand-btn" onclick="goBack()" title="Add assets">⊞</button>
+    </div>
+
+    <!-- Cards -->
+    <div class="alloc-scroll" id="alloc-cards"></div>
+
+    <!-- Bottom -->
+    <div class="alloc-bottom">
+      <span class="alloc-status" id="alloc-status">Allocated: 0%</span>
+      <button class="next-btn" id="next-alloc-btn" disabled onclick="confirmAllocation()">Next</button>
+    </div>
+  </div>
+
+  <div class="home-indicator"><div></div></div>
+</div>
+
+<script>
+// ── Data ─────────────────────────────────────────────────────────────
+const CATS_ALL = ['All','Stocks','Bonds','Regions','Thematic','Commodities'];
+
+const CAT = {
+  Stocks:      { bg:'rgba(200,140,230,0.20)', bar:'#d8a0e8' },
+  Bonds:       { bg:'rgba(130,170,240,0.20)', bar:'#8cb0f0' },
+  Regions:     { bg:'rgba(120,200,150,0.20)', bar:'#80c898' },
+  Thematic:    { bg:'rgba(240,185,100,0.20)', bar:'#f0c070' },
+  Commodities: { bg:'rgba(180,175,168,0.20)', bar:'#c8c4bc' },
+};
+
+const ASSETS = [
+  { id:1,  name:'Europe',                category:'Stocks',      ret:8.2,  code:'EU', icon:'📈' },
+  { id:2,  name:'Emerging Markets',      category:'Stocks',      ret:7.9,  code:'EM', icon:'📈' },
+  { id:3,  name:'Asia Pacific',          category:'Stocks',      ret:6.9,  code:'AP', icon:'🌏' },
+  { id:4,  name:'North America',         category:'Stocks',      ret:15.2, code:'NA', icon:'🌎' },
+  { id:5,  name:'Innovative Healthcare', category:'Thematic',    ret:10.2, code:'IH', icon:'🧬' },
+  { id:6,  name:'Gold',                  category:'Commodities', ret:16.5, code:'GD', icon:'🪙' },
+  { id:7,  name:'US Treasury',           category:'Bonds',       ret:4.5,  code:'UT', icon:'🏛' },
+  { id:8,  name:'Corporate Bonds',       category:'Bonds',       ret:5.8,  code:'CB', icon:'📄' },
+  { id:9,  name:'Clean Energy',          category:'Thematic',    ret:12.1, code:'CE', icon:'⚡' },
+  { id:10, name:'Silver',                category:'Commodities', ret:9.4,  code:'SL', icon:'🔩' },
+];
+
+// ── State ─────────────────────────────────────────────────────────────
+let activeCat  = 'All';
+let selectedIds = [];
+let allocs      = {};   // id → number (always sums to 100 via auto-rebalance)
+
+const asset  = id  => ASSETS.find(x => x.id === id);
+const total  = ()  => selectedIds.reduce((s, id) => s + (allocs[id]||0), 0);
+
+// ── Screen 1 ─────────────────────────────────────────────────────────
+function renderTabs() {
+  document.getElementById('tabs').innerHTML = CATS_ALL.map(c =>
+    `<button class="tab ${c===activeCat?'active':''}" onclick="setTab('${c}')">${c}</button>`
+  ).join('');
+}
+
+function setTab(c) { activeCat = c; renderTabs(); renderList(); }
+
+function renderList() {
+  const list = activeCat==='All' ? ASSETS : ASSETS.filter(a => a.category===activeCat);
+  document.getElementById('asset-list').innerHTML = list.map(a => {
+    const sel = selectedIds.includes(a.id);
+    return `
+      <div class="asset-row ${sel?'selected':''}" onclick="toggle(${a.id})">
+        <div class="asset-icon" style="background:${CAT[a.category].bg}">${a.icon}</div>
+        <div class="asset-info">
+          <div class="asset-name">${a.name} <span class="info-icon">ⓘ</span></div>
+          <div class="asset-return">Est ${a.ret.toFixed(1).replace('.',',')}% return</div>
+        </div>
+        <div class="checkbox"><span class="checkbox-check">✓</span></div>
+      </div>`;
+  }).join('');
+}
+
+function toggle(id) {
+  if (selectedIds.includes(id)) {
+    selectedIds = selectedIds.filter(x=>x!==id);
+    delete allocs[id];
+  } else {
+    selectedIds.push(id);
+  }
+  rebalance();
+  renderList(); renderChips(); syncNextBtn();
+}
+
+function renderChips() {
+  document.getElementById('selected-chips').innerHTML = selectedIds.map(id => {
+    const a = asset(id);
+    return `
+      <div class="chip">
+        <div class="chip-icon" style="background:${CAT[a.category].bg}">${a.code}</div>
+        <span class="chip-label">${a.code}</span>
+      </div>`;
+  }).join('');
+}
+
+function syncNextBtn() {
+  const n = selectedIds.length;
+  const b = document.getElementById('next-btn');
+  b.disabled = n===0;
+  b.textContent = n===0 ? 'Next' : `Next (${n} Selected)`;
+}
+
+function closeApp() {
+  if (selectedIds.length && !confirm('Discard selection?')) return;
+  selectedIds=[]; allocs={}; activeCat='All';
+  renderTabs(); renderList(); renderChips(); syncNextBtn();
+}
+
+// ── Navigation ────────────────────────────────────────────────────────
+function goToAllocation() {
+  rebalance();
+  document.getElementById('screen-choose').classList.remove('active');
+  document.getElementById('screen-alloc').classList.add('active');
+  renderAlloc();
+}
+
+function goBack() {
+  document.getElementById('screen-alloc').classList.remove('active');
+  document.getElementById('screen-choose').classList.add('active');
+  renderList();
+}
+
+function confirmAllocation() {
+  const lines = selectedIds.map(id => `${asset(id).name}: ${Math.round(allocs[id])}%`).join('\n');
+  alert('Portfolio confirmed!\n\n' + lines);
+}
+
+// ── Auto-rebalance logic ─────────────────────────────────────────────
+// Moving one slider redistributes the delta across all other assets
+// so total always stays at 100%.
+
+function rebalance() {
+  const n = selectedIds.length; if (!n) return;
+  const share = 100 / n;
+  selectedIds.forEach(id => allocs[id] = share);
+  fixDrift();
+}
+
+function fixDrift() {
+  if (!selectedIds.length) return;
+  const t    = selectedIds.reduce((s, id) => s + allocs[id], 0);
+  const diff = 100 - t;
+  if (Math.abs(diff) > 0.001)
+    allocs[selectedIds[0]] = Math.max(0, allocs[selectedIds[0]] + diff);
+}
+
+function onSlider(changedId, rawVal) {
+  const newVal    = parseFloat(rawVal);
+  const oldVal    = allocs[changedId];
+  const delta     = newVal - oldVal;
+  if (Math.abs(delta) < 0.001) return;
+
+  const others      = selectedIds.filter(id => id !== changedId);
+  const totalOthers = others.reduce((s, id) => s + allocs[id], 0);
+
+  if (others.length === 0) {
+    // Only one asset — clamp to 100
+    allocs[changedId] = 100;
+    refresh(); return;
+  }
+
+  // Clamp: can't take more than others have
+  const clamped    = delta > 0 ? Math.min(newVal, oldVal + totalOthers) : newVal;
+  const actualDelta = clamped - oldVal;
+  allocs[changedId] = clamped;
+
+  if (totalOthers > 0) {
+    others.forEach(id => {
+      allocs[id] = Math.max(0, allocs[id] - actualDelta * (allocs[id] / totalOthers));
+    });
+  }
+  fixDrift();
+  refresh();
+}
+
+function stepAlloc(changedId, delta) {
+  const others      = selectedIds.filter(id => id !== changedId);
+  const totalOthers = others.reduce((s, id) => s + allocs[id], 0);
+  const cur         = allocs[changedId];
+
+  if (delta > 0 && totalOthers < 1) return;
+  if (delta < 0 && cur < 1) return;
+
+  const step        = Math.min(Math.abs(delta), delta > 0 ? totalOthers : cur);
+  const actualDelta = delta > 0 ? step : -step;
+
+  allocs[changedId] = Math.max(0, Math.min(100, cur + actualDelta));
+
+  if (totalOthers > 0 && others.length > 0) {
+    others.forEach(id => {
+      allocs[id] = Math.max(0, allocs[id] - actualDelta * (allocs[id] / totalOthers));
+    });
+  }
+  fixDrift();
+  refresh();
+}
+
+function removeAsset(id) {
+  selectedIds = selectedIds.filter(x => x!==id);
+  delete allocs[id];
+  rebalance();
+  renderList(); renderChips(); syncNextBtn();
+  if (!selectedIds.length) { goBack(); return; }
+  renderAlloc();
+}
+
+// ── Allocation render ────────────────────────────────────────────────
+function renderAlloc() {
+  renderCards();
+  refresh();
+}
+
+// Lightweight refresh — no DOM rebuild
+function refresh() {
+  const t = total();
+
+  // Stats
+  let ret = 0;
+  selectedIds.forEach(id => { ret += asset(id).ret * (allocs[id]/100); });
+  document.getElementById('stat-return').textContent = ret.toFixed(1) + '%';
+  const risk = ret < 5 ? 1 : ret < 9 ? 2 : ret < 13 ? 3 : 4;
+  document.querySelectorAll('.risk-dot').forEach((d,i) => d.classList.toggle('on', i<risk));
+
+  // Progress bar
+  const catMap = {};
+  selectedIds.forEach(id => {
+    const a = asset(id);
+    catMap[a.category] = (catMap[a.category]||0) + allocs[id];
+  });
+  const segs = Object.entries(catMap).filter(([,v])=>v>0.1).sort((a,b)=>b[1]-a[1]);
+  document.getElementById('progress-bar').innerHTML = segs
+    .map(([cat,pct]) => `<div class="progress-seg" style="width:${pct}%;background:${CAT[cat].bar}"></div>`)
+    .join('') + `<div class="progress-seg" style="flex:1;background:var(--gray2)"></div>`;
+
+  // Legend
+  document.getElementById('progress-legend').innerHTML = segs
+    .map(([cat,pct]) => `
+      <div class="legend-item">
+        <div class="legend-dot" style="background:${CAT[cat].bar}"></div>
+        ${Math.round(pct)}% ${cat}
+      </div>`)
+    .join('');
+
+  // Each card
+  selectedIds.forEach(id => {
+    const val = allocs[id];
+    const pctEl  = document.getElementById(`pct-${id}`);
+    const slider = document.getElementById(`sl-${id}`);
+    if (pctEl)  pctEl.textContent = Math.round(val) + '%';
+    if (slider) { slider.value = val; paintTrack(slider, val, id); }
+  });
+
+  // Bottom status
+  const rounded = Math.round(t);
+  const statusEl = document.getElementById('alloc-status');
+  statusEl.textContent = `Allocated: ${rounded}%`;
+  statusEl.className   = 'alloc-status' + (rounded===100 ? ' complete' : rounded>100 ? ' over' : '');
+
+  // Next button
+  const nextBtn = document.getElementById('next-alloc-btn');
+  nextBtn.disabled = Math.abs(t-100) > 0.5;
+}
+
+function renderCards() {
+  document.getElementById('alloc-cards').innerHTML = selectedIds.map(id => {
+    const a   = asset(id);
+    const val = allocs[id];
+    return `
+      <div class="alloc-card" id="card-${id}">
+        <div class="alloc-card-top">
+          <div class="alloc-card-icon" style="background:${CAT[a.category].bg}">${a.icon}</div>
+          <div class="alloc-card-info">
+            <div class="alloc-card-name">${a.name}</div>
+            <div class="alloc-card-cat">${a.category}</div>
+          </div>
+          <button class="trash-btn" onclick="removeAsset(${id})" title="Remove">🗑</button>
+        </div>
+        <div class="alloc-card-row">
+          <button class="step-sym" onclick="stepAlloc(${id}, -5)">−</button>
+          <div class="slider-wrap">
+            <input type="range" class="alloc-slider" id="sl-${id}"
+              min="0" max="100" step="1" value="${Math.round(val)}"
+              oninput="onSlider(${id}, this.value)" />
+          </div>
+          <button class="step-sym" onclick="stepAlloc(${id}, 5)">+</button>
+          <div class="pct-box" id="pct-${id}">${Math.round(val)}%</div>
+        </div>
+      </div>`;
+  }).join('');
+
+  // Paint tracks after DOM is ready
+  selectedIds.forEach(id => {
+    const slider = document.getElementById(`sl-${id}`);
+    if (slider) paintTrack(slider, allocs[id], id);
+  });
+}
+
+function paintTrack(slider, val, id) {
+  const a = asset(id);
+  slider.style.background =
+    `linear-gradient(to right, ${CAT[a.category].bar} ${val}%, var(--gray2) ${val}%)`;
+}
+
+// ── Init ─────────────────────────────────────────────────────────────
+renderTabs();
+renderList();
+syncNextBtn();
+</script>
+</body>
+</html>
