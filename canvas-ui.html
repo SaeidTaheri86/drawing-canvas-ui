@@ -10,9 +10,9 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { width: 100vw; height: 100vh; overflow: hidden; }
+    body { width: 100vw; height: 100vh; overflow: hidden; background: #eeecea; }
     #root { width: 100%; height: 100%; }
-    button { border: none; background: none; cursor: pointer; padding: 0; }
+    button { border: none; background: none; cursor: pointer; padding: 0; outline: none; }
     .text-overlay {
       position: fixed; background: transparent;
       border: 1.5px dashed rgba(100,100,100,0.35); border-radius: 2px;
@@ -20,6 +20,16 @@
       min-width: 60px; min-height: 28px; padding: 2px 4px;
       line-height: 1.4; overflow: hidden; white-space: pre;
     }
+    .tool-btn {
+      transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+                  background 0.12s ease;
+    }
+    .tool-btn:hover { background: rgba(0,0,0,0.04) !important; }
+    .icon-btn {
+      transition: background 0.12s ease, transform 0.1s ease;
+    }
+    .icon-btn:hover { background: #e4e4e4 !important; }
+    .icon-btn:active { transform: scale(0.93); }
   </style>
 </head>
 <body>
@@ -27,8 +37,19 @@
 <script type="text/babel">
   const { useState, useRef, useEffect, useCallback, forwardRef } = React;
 
-  // ─── Constants ────────────────────────────────────────────
-  const SWATCHES = ['#1c2040','#5e42a6','#c73b5e','#8a8a8a','#2aabd3','#f4f0ea'];
+  // ─── Tool Definitions ────────────────────────────────────
+  // drawType maps to the canvas hook's drawing logic
+  const TOOL_DEFS = [
+    { id: 'fineliner-red',    drawType: 'fineliner', color: '#e03030', label: 'Fine liner (Red)'    },
+    { id: 'fineliner-yellow', drawType: 'fineliner', color: '#ddb000', label: 'Fine liner (Yellow)' },
+    { id: 'highlighter-green',drawType: 'marker',    color: '#60d020', label: 'Highlighter (Green)' },
+    { id: 'highlighter-pink', drawType: 'marker',    color: '#e020c0', label: 'Highlighter (Pink)'  },
+    { id: 'marker-black',     drawType: 'brush',     color: '#111111', label: 'Marker (Black)'      },
+    { id: 'pencil-purple',    drawType: 'pencil',    color: '#7030d8', label: 'Pencil (Purple)'     },
+    { id: 'eraser',           drawType: 'eraser',    color: null,      label: 'Eraser'              },
+    { id: 'knife',            drawType: 'fineliner', color: '#555555', label: 'Precision'           },
+  ];
+
   const SIZE_RADIUS = { xs: 6, sm: 14, md: 26, lg: 42 };
 
   // ─── Utilities ────────────────────────────────────────────
@@ -36,647 +57,488 @@
     const n = parseInt(hex.replace('#',''), 16);
     return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 };
   }
-
   function hslToRgb(h, s, l) {
     if (s === 0) { const v = Math.round(l*255); return [v,v,v]; }
-    const q = l < 0.5 ? l*(1+s) : l+s-l*s, p = 2*l - q;
-    const f = t => {
-      t = ((t%1)+1)%1;
-      if (t < 1/6) return p + (q-p)*6*t;
-      if (t < 1/2) return q;
-      if (t < 2/3) return p + (q-p)*(2/3-t)*6;
-      return p;
-    };
+    const q = l<0.5 ? l*(1+s) : l+s-l*s, p = 2*l-q;
+    const f = t => { t=((t%1)+1)%1; if(t<1/6) return p+(q-p)*6*t; if(t<1/2) return q; if(t<2/3) return p+(q-p)*(2/3-t)*6; return p; };
     return [Math.round(f(h+1/3)*255), Math.round(f(h)*255), Math.round(f(h-1/3)*255)];
   }
-
   function createPigmentBlob(rgb, radius, seed) {
-    const pad = Math.ceil(radius * 0.4), size = (radius + pad) * 2;
-    const cv = document.createElement('canvas');
-    cv.width = size; cv.height = size;
-    const ctx = cv.getContext('2d');
-    const cx = size/2, cy = size/2;
-    const { r, g, b } = rgb;
-    let lc = (seed*9301+49297)%233280;
-    const rand = () => { lc = (lc*9301+49297)%233280; return lc/233280; };
-    const h = ctx.createRadialGradient(cx,cy,radius*0.4,cx,cy,radius*1.3);
-    h.addColorStop(0,`rgba(${r},${g},${b},0)`);
-    h.addColorStop(0.55,`rgba(${r},${g},${b},0.018)`);
-    h.addColorStop(1,`rgba(${r},${g},${b},0)`);
-    ctx.fillStyle = h;
-    ctx.beginPath(); ctx.arc(cx,cy,radius*1.3,0,Math.PI*2); ctx.fill();
-    for (let i=0; i<9; i++) {
-      const angle = (i/9)*Math.PI*2 + rand()*0.9;
-      const ox = Math.cos(angle)*radius*0.2*rand(), oy = Math.sin(angle)*radius*0.2*rand();
-      const lr = radius*(0.52+rand()*0.42);
-      const lg = ctx.createRadialGradient(cx+ox,cy+oy,0,cx+ox,cy+oy,lr);
-      lg.addColorStop(0,`rgba(${r},${g},${b},0.09)`);
-      lg.addColorStop(0.55,`rgba(${r},${g},${b},0.04)`);
-      lg.addColorStop(1,`rgba(${r},${g},${b},0)`);
-      ctx.fillStyle = lg;
-      ctx.beginPath(); ctx.arc(cx+ox,cy+oy,lr,0,Math.PI*2); ctx.fill();
+    const pad=Math.ceil(radius*0.4), size=(radius+pad)*2;
+    const cv=document.createElement('canvas'); cv.width=size; cv.height=size;
+    const ctx=cv.getContext('2d'); const cx=size/2,cy=size/2; const {r,g,b}=rgb;
+    let lc=(seed*9301+49297)%233280;
+    const rand=()=>{ lc=(lc*9301+49297)%233280; return lc/233280; };
+    const h=ctx.createRadialGradient(cx,cy,radius*0.4,cx,cy,radius*1.3);
+    h.addColorStop(0,`rgba(${r},${g},${b},0)`); h.addColorStop(0.55,`rgba(${r},${g},${b},0.018)`); h.addColorStop(1,`rgba(${r},${g},${b},0)`);
+    ctx.fillStyle=h; ctx.beginPath(); ctx.arc(cx,cy,radius*1.3,0,Math.PI*2); ctx.fill();
+    for(let i=0;i<9;i++){
+      const angle=(i/9)*Math.PI*2+rand()*0.9, ox=Math.cos(angle)*radius*0.2*rand(), oy=Math.sin(angle)*radius*0.2*rand(), lr=radius*(0.52+rand()*0.42);
+      const lg=ctx.createRadialGradient(cx+ox,cy+oy,0,cx+ox,cy+oy,lr);
+      lg.addColorStop(0,`rgba(${r},${g},${b},0.09)`); lg.addColorStop(0.55,`rgba(${r},${g},${b},0.04)`); lg.addColorStop(1,`rgba(${r},${g},${b},0)`);
+      ctx.fillStyle=lg; ctx.beginPath(); ctx.arc(cx+ox,cy+oy,lr,0,Math.PI*2); ctx.fill();
     }
-    const eg = ctx.createRadialGradient(cx,cy,radius*0.45,cx,cy,radius);
-    eg.addColorStop(0,`rgba(${r},${g},${b},0)`);
-    eg.addColorStop(0.65,`rgba(${r},${g},${b},0.03)`);
-    eg.addColorStop(1,`rgba(${r},${g},${b},0.10)`);
-    ctx.fillStyle = eg;
-    ctx.beginPath(); ctx.arc(cx,cy,radius,0,Math.PI*2); ctx.fill();
+    const eg=ctx.createRadialGradient(cx,cy,radius*0.45,cx,cy,radius);
+    eg.addColorStop(0,`rgba(${r},${g},${b},0)`); eg.addColorStop(0.65,`rgba(${r},${g},${b},0.03)`); eg.addColorStop(1,`rgba(${r},${g},${b},0.10)`);
+    ctx.fillStyle=eg; ctx.beginPath(); ctx.arc(cx,cy,radius,0,Math.PI*2); ctx.fill();
     return cv;
   }
 
   // ─── useWatercolorCanvas ──────────────────────────────────
   function useWatercolorCanvas(canvasRef, { activeTool, activeColor, brushSize, zoomRef, saveSnapshot, onTextClick }) {
-    const toolRef  = useRef(activeTool);
-    const colorRef = useRef(activeColor);
-    const sizeRef  = useRef(brushSize);
-    useEffect(() => { toolRef.current  = activeTool;  }, [activeTool]);
-    useEffect(() => { colorRef.current = activeColor; }, [activeColor]);
-    useEffect(() => { sizeRef.current  = brushSize;   }, [brushSize]);
+    const toolRef=useRef(activeTool), colorRef=useRef(activeColor), sizeRef=useRef(brushSize);
+    useEffect(()=>{toolRef.current=activeTool;},[activeTool]);
+    useEffect(()=>{colorRef.current=activeColor;},[activeColor]);
+    useEffect(()=>{sizeRef.current=brushSize;},[brushSize]);
+    const blobPool=useRef(new Map());
+    const ds=useRef({isDrawing:false,positions:[],lastStampPos:null,lastLinePos:null});
 
-    const blobPool = useRef(new Map());
-    const ds = useRef({ isDrawing:false, positions:[], lastStampPos:null, lastLinePos:null });
-
-    useEffect(() => {
-      const canvas = canvasRef.current; if (!canvas) return;
-      const resize = () => {
-        const tmp = document.createElement('canvas');
-        tmp.width = canvas.width; tmp.height = canvas.height;
-        if (canvas.width > 0 && canvas.height > 0)
-          tmp.getContext('2d').drawImage(canvas, 0, 0);
-        canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight;
-        if (tmp.width > 0) canvas.getContext('2d').drawImage(tmp, 0, 0);
+    useEffect(()=>{
+      const canvas=canvasRef.current; if(!canvas) return;
+      const resize=()=>{
+        const tmp=document.createElement('canvas'); tmp.width=canvas.width; tmp.height=canvas.height;
+        if(canvas.width>0&&canvas.height>0) tmp.getContext('2d').drawImage(canvas,0,0);
+        canvas.width=canvas.offsetWidth; canvas.height=canvas.offsetHeight;
+        if(tmp.width>0) canvas.getContext('2d').drawImage(tmp,0,0);
       };
-      resize();
-      const ro = new ResizeObserver(resize);
-      ro.observe(canvas);
-      return () => ro.disconnect();
-    }, [canvasRef]);
+      resize(); const ro=new ResizeObserver(resize); ro.observe(canvas); return()=>ro.disconnect();
+    },[canvasRef]);
 
-    const getBlob = (radius, rgb) => {
-      const key = `${radius}_${rgb.r}_${rgb.g}_${rgb.b}`;
-      if (!blobPool.current.has(key))
-        blobPool.current.set(key, Array.from({length:5},(_,i)=>createPigmentBlob(rgb,radius,i+1)));
-      const pool = blobPool.current.get(key);
-      return pool[Math.floor(Math.random()*pool.length)];
+    const getBlob=(radius,rgb)=>{
+      const key=`${radius}_${rgb.r}_${rgb.g}_${rgb.b}`;
+      if(!blobPool.current.has(key)) blobPool.current.set(key,Array.from({length:5},(_,i)=>createPigmentBlob(rgb,radius,i+1)));
+      const pool=blobPool.current.get(key); return pool[Math.floor(Math.random()*pool.length)];
     };
-
-    const getPressure = (e) => {
-      if (e.pressure > 0 && e.pressure < 1) return e.pressure;
-      const pts = ds.current.positions;
-      if (pts.length < 2) return 0.5;
-      const a = pts[pts.length-2], b = pts[pts.length-1];
-      return Math.max(0.08, Math.min(1, 1 - Math.hypot(b.x-a.x,b.y-a.y)/Math.max(b.t-a.t,1)/2));
+    const getPressure=(e)=>{
+      if(e.pressure>0&&e.pressure<1) return e.pressure;
+      const pts=ds.current.positions; if(pts.length<2) return 0.5;
+      const a=pts[pts.length-2],b=pts[pts.length-1];
+      return Math.max(0.08,Math.min(1,1-Math.hypot(b.x-a.x,b.y-a.y)/Math.max(b.t-a.t,1)/2));
     };
-
-    const getPos = (e) => {
-      const rect = canvasRef.current.getBoundingClientRect();
-      const z = zoomRef.current;
-      return { x:(e.clientX-rect.left)/z, y:(e.clientY-rect.top)/z, t:performance.now() };
+    const getPos=(e)=>{
+      const rect=canvasRef.current.getBoundingClientRect(), z=zoomRef.current;
+      return {x:(e.clientX-rect.left)/z, y:(e.clientY-rect.top)/z, t:performance.now()};
     };
-
-    // line-based tools style
-    const getLineStyle = (tool) => {
-      const r = SIZE_RADIUS[sizeRef.current] ?? 14;
-      switch(tool) {
-        case 'pen':       return { lw: Math.max(1.5, r*0.13), alpha: 0.95, cap:'round' };
-        case 'pencil':    return { lw: Math.max(1,   r*0.18), alpha: 0.88, cap:'round' };
-        case 'fineliner': return { lw: Math.max(0.7, r*0.055),alpha: 1.0,  cap:'round' };
-        case 'marker':    return { lw: Math.max(12,  r*1.3),  alpha: 0.28, cap:'square'};
-        case 'brush':     return { lw: Math.max(2,   r*0.38), alpha: 0.80, cap:'round' };
-        default:          return { lw: 1, alpha: 0.88, cap:'round' };
+    const getLineStyle=(tool)=>{
+      const r=SIZE_RADIUS[sizeRef.current]??14;
+      switch(tool){
+        case 'pen':       return {lw:Math.max(1.5,r*0.13),alpha:0.95,cap:'round'};
+        case 'pencil':    return {lw:Math.max(1,r*0.18),  alpha:0.88,cap:'round'};
+        case 'fineliner': return {lw:Math.max(0.8,r*0.06),alpha:1.0, cap:'round'};
+        case 'marker':    return {lw:Math.max(14,r*1.4),  alpha:0.30,cap:'square'};
+        case 'brush':     return {lw:Math.max(3,r*0.4),   alpha:0.92,cap:'round'};
+        default:          return {lw:1,alpha:0.88,cap:'round'};
       }
     };
-
-    const LINE_TOOLS = new Set(['pen','pencil','fineliner','marker','brush']);
-
-    const drawLine = (ctx, from, to, rgb, tool) => {
-      const { lw, alpha, cap } = getLineStyle(tool);
-      ctx.save();
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha  = alpha;
-      ctx.strokeStyle  = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-      ctx.lineWidth    = lw; ctx.lineCap = cap; ctx.lineJoin = 'round';
-      ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.lineTo(to.x,to.y); ctx.stroke();
-      ctx.restore();
+    const LINE_TOOLS=new Set(['pen','pencil','fineliner','marker','brush']);
+    const drawLine=(ctx,from,to,rgb,tool)=>{
+      const {lw,alpha,cap}=getLineStyle(tool);
+      ctx.save(); ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=alpha;
+      ctx.strokeStyle=`rgb(${rgb.r},${rgb.g},${rgb.b})`; ctx.lineWidth=lw; ctx.lineCap=cap; ctx.lineJoin='round';
+      ctx.beginPath(); ctx.moveTo(from.x,from.y); ctx.lineTo(to.x,to.y); ctx.stroke(); ctx.restore();
+    };
+    const stampWatercolor=(ctx,x,y,pressure,rgb)=>{
+      const baseR=SIZE_RADIUS[sizeRef.current]??14, stampR=Math.max(4,Math.round(baseR*(0.45+pressure*0.85)));
+      const blob=getBlob(stampR,rgb);
+      ctx.save(); ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=0.04+pressure*0.10;
+      ctx.drawImage(blob,x-blob.width/2,y-blob.height/2); ctx.restore();
+    };
+    const eraseAt=(ctx,x,y)=>{
+      const radius=(SIZE_RADIUS[sizeRef.current]??14)*1.4;
+      ctx.save(); ctx.globalCompositeOperation='destination-out'; ctx.fillStyle='rgba(0,0,0,1)';
+      ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2); ctx.fill(); ctx.restore();
     };
 
-    const stampWatercolor = (ctx, x, y, pressure, rgb) => {
-      const baseR  = SIZE_RADIUS[sizeRef.current] ?? 14;
-      const stampR = Math.max(4, Math.round(baseR*(0.45+pressure*0.85)));
-      const blob   = getBlob(stampR, rgb);
-      ctx.save();
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.globalAlpha = 0.04 + pressure*0.10;
-      ctx.drawImage(blob, x-blob.width/2, y-blob.height/2);
-      ctx.restore();
-    };
+    const onPointerDown=useCallback((e)=>{
+      const tool=toolRef.current;
+      if(tool==='text'){const pos=getPos(e); onTextClick(pos.x,pos.y,e.clientX,e.clientY); return;}
+      saveSnapshot(); e.currentTarget.setPointerCapture(e.pointerId); blobPool.current.clear();
+      const pos=getPos(e), rgb=hexToRgb(colorRef.current), ctx=canvasRef.current.getContext('2d');
+      ds.current.isDrawing=true; ds.current.positions=[pos];
+      ds.current.lastStampPos={x:pos.x,y:pos.y}; ds.current.lastLinePos={x:pos.x,y:pos.y};
+      if(LINE_TOOLS.has(tool)){
+        const {lw,alpha}=getLineStyle(tool);
+        ctx.save(); ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=alpha;
+        ctx.fillStyle=`rgb(${rgb.r},${rgb.g},${rgb.b})`;
+        ctx.beginPath(); ctx.arc(pos.x,pos.y,lw/2,0,Math.PI*2); ctx.fill(); ctx.restore();
+      } else if(tool==='watercolor'){
+        stampWatercolor(ctx,pos.x,pos.y,e.pressure>0?e.pressure:0.5,rgb);
+      } else if(tool==='eraser'){eraseAt(ctx,pos.x,pos.y);}
+    },[saveSnapshot,onTextClick]);
 
-    const eraseAt = (ctx, x, y) => {
-      const radius = (SIZE_RADIUS[sizeRef.current]??14)*1.4;
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = 'rgba(0,0,0,1)';
-      ctx.beginPath(); ctx.arc(x,y,radius,0,Math.PI*2); ctx.fill();
-      ctx.restore();
-    };
-
-    const onPointerDown = useCallback((e) => {
-      const tool = toolRef.current;
-      if (tool === 'text') { const pos = getPos(e); onTextClick(pos.x,pos.y,e.clientX,e.clientY); return; }
-      saveSnapshot();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      blobPool.current.clear();
-      const pos = getPos(e), rgb = hexToRgb(colorRef.current);
-      const ctx = canvasRef.current.getContext('2d');
-      ds.current.isDrawing = true;
-      ds.current.positions = [pos];
-      ds.current.lastStampPos = { x:pos.x, y:pos.y };
-      ds.current.lastLinePos  = { x:pos.x, y:pos.y };
-      if (LINE_TOOLS.has(tool)) {
-        const { lw, alpha } = getLineStyle(tool);
-        ctx.save();
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.globalAlpha = alpha;
-        ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-        ctx.beginPath(); ctx.arc(pos.x, pos.y, lw/2, 0, Math.PI*2); ctx.fill();
-        ctx.restore();
-      } else if (tool === 'watercolor') {
-        stampWatercolor(ctx, pos.x, pos.y, e.pressure>0?e.pressure:0.5, rgb);
-      } else if (tool === 'eraser') {
-        eraseAt(ctx, pos.x, pos.y);
-      }
-    }, [saveSnapshot, onTextClick]);
-
-    const onPointerMove = useCallback((e) => {
-      if (!ds.current.isDrawing) return;
-      const pos = getPos(e);
-      const pts = ds.current.positions;
-      pts.push(pos); if (pts.length > 8) pts.shift();
-      const tool = toolRef.current, rgb = hexToRgb(colorRef.current);
-      const ctx = canvasRef.current.getContext('2d');
-      if (LINE_TOOLS.has(tool)) {
-        const last = ds.current.lastLinePos;
-        drawLine(ctx, last, pos, rgb, tool);
-        ds.current.lastLinePos = { x:pos.x, y:pos.y };
-      } else if (tool === 'watercolor') {
-        const pressure = getPressure(e);
-        const baseR = SIZE_RADIUS[sizeRef.current]??14;
-        const stampR = baseR*(0.45+pressure*0.85);
-        const spacing = Math.max(2, stampR*0.28);
-        const last = ds.current.lastStampPos;
-        const dx = pos.x-last.x, dy = pos.y-last.y, dist = Math.hypot(dx,dy);
-        if (dist >= spacing) {
-          const steps = Math.ceil(dist/spacing);
-          for (let i=1; i<=steps; i++) {
-            const t = i/steps;
-            stampWatercolor(ctx, last.x+dx*t, last.y+dy*t, pressure, rgb);
-          }
-          ds.current.lastStampPos = { x:pos.x, y:pos.y };
+    const onPointerMove=useCallback((e)=>{
+      if(!ds.current.isDrawing) return;
+      const pos=getPos(e), pts=ds.current.positions;
+      pts.push(pos); if(pts.length>8) pts.shift();
+      const tool=toolRef.current, rgb=hexToRgb(colorRef.current), ctx=canvasRef.current.getContext('2d');
+      if(LINE_TOOLS.has(tool)){
+        drawLine(ctx,ds.current.lastLinePos,pos,rgb,tool);
+        ds.current.lastLinePos={x:pos.x,y:pos.y};
+      } else if(tool==='watercolor'){
+        const pressure=getPressure(e), baseR=SIZE_RADIUS[sizeRef.current]??14;
+        const stampR=baseR*(0.45+pressure*0.85), spacing=Math.max(2,stampR*0.28);
+        const last=ds.current.lastStampPos, dx=pos.x-last.x, dy=pos.y-last.y, dist=Math.hypot(dx,dy);
+        if(dist>=spacing){
+          const steps=Math.ceil(dist/spacing);
+          for(let i=1;i<=steps;i++){const t=i/steps; stampWatercolor(ctx,last.x+dx*t,last.y+dy*t,pressure,rgb);}
+          ds.current.lastStampPos={x:pos.x,y:pos.y};
         }
-      } else if (tool === 'eraser') {
-        const last = ds.current.lastLinePos;
-        const dx = pos.x-last.x, dy = pos.y-last.y, dist = Math.hypot(dx,dy);
-        const radius = (SIZE_RADIUS[sizeRef.current]??14)*1.4;
-        const spacing = Math.max(2, radius*0.5);
-        if (dist >= spacing) {
-          const steps = Math.ceil(dist/spacing);
-          for (let i=1; i<=steps; i++) { const t=i/steps; eraseAt(ctx, last.x+dx*t, last.y+dy*t); }
-          ds.current.lastLinePos = { x:pos.x, y:pos.y };
+      } else if(tool==='eraser'){
+        const last=ds.current.lastLinePos, dx=pos.x-last.x, dy=pos.y-last.y, dist=Math.hypot(dx,dy);
+        const radius=(SIZE_RADIUS[sizeRef.current]??14)*1.4, spacing=Math.max(2,radius*0.5);
+        if(dist>=spacing){
+          const steps=Math.ceil(dist/spacing);
+          for(let i=1;i<=steps;i++){const t=i/steps; eraseAt(ctx,last.x+dx*t,last.y+dy*t);}
+          ds.current.lastLinePos={x:pos.x,y:pos.y};
         }
       }
-    }, []);
-
-    const onPointerUp = useCallback(() => { ds.current.isDrawing=false; ds.current.positions=[]; }, []);
-    return { onPointerDown, onPointerMove, onPointerUp };
+    },[]);
+    const onPointerUp=useCallback(()=>{ds.current.isDrawing=false; ds.current.positions=[];},[]);
+    return {onPointerDown,onPointerMove,onPointerUp};
   }
 
   // ─── WatercolorCanvas ─────────────────────────────────────
-  const WatercolorCanvas = forwardRef(function WatercolorCanvas(
-    { activeTool, activeColor, brushSize, zoomRef, saveSnapshot, onTextClick }, canvasRef
-  ) {
-    const { onPointerDown, onPointerMove, onPointerUp } =
-      useWatercolorCanvas(canvasRef, { activeTool, activeColor, brushSize, zoomRef, saveSnapshot, onTextClick });
-    const cursor = activeTool==='eraser' ? 'cell' : activeTool==='text' ? 'text' : 'crosshair';
-    return (
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full"
-        style={{ display:'block', background:'transparent', mixBlendMode:'multiply', cursor, touchAction:'none' }}
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp} onPointerLeave={onPointerUp} />
+  const WatercolorCanvas=forwardRef(function WatercolorCanvas({activeTool,activeColor,brushSize,zoomRef,saveSnapshot,onTextClick},canvasRef){
+    const {onPointerDown,onPointerMove,onPointerUp}=useWatercolorCanvas(canvasRef,{activeTool,activeColor,brushSize,zoomRef,saveSnapshot,onTextClick});
+    const cursor=activeTool==='eraser'?'cell':activeTool==='text'?'text':'crosshair';
+    return(
+      <canvas ref={canvasRef} style={{position:'absolute',inset:0,width:'100%',height:'100%',display:'block',background:'transparent',mixBlendMode:'multiply',cursor,touchAction:'none'}}
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp}/>
     );
   });
 
   // ─── TextOverlay ──────────────────────────────────────────
-  function TextOverlay({ screenX, screenY, color, zoom, onCommit, onCancel }) {
-    const ref = useRef(null);
-    const fontSize = Math.max(12, Math.round(18*zoom));
-    useEffect(() => { ref.current?.focus(); }, []);
-    return (
+  function TextOverlay({screenX,screenY,color,zoom,onCommit,onCancel}){
+    const ref=useRef(null); const fontSize=Math.max(12,Math.round(18*zoom));
+    useEffect(()=>{ref.current?.focus();},[]);
+    return(
       <textarea ref={ref} className="text-overlay"
-        style={{ left:screenX, top:screenY-fontSize, fontSize:`${fontSize}px`, color, lineHeight:1.4 }}
+        style={{left:screenX,top:screenY-fontSize,fontSize:`${fontSize}px`,color,lineHeight:1.4}}
         rows={1}
-        onKeyDown={(e) => {
-          if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); const t=ref.current.value; if(t.trim()) onCommit(t); else onCancel(); }
-          if (e.key==='Escape') onCancel();
-        }}
-        onBlur={(e) => { const t=e.target.value; if(t.trim()) onCommit(t); else onCancel(); }}
-        onChange={(e) => { e.target.style.height='auto'; e.target.style.height=e.target.scrollHeight+'px'; }}
-      />
+        onKeyDown={(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const t=ref.current.value;if(t.trim())onCommit(t);else onCancel();}if(e.key==='Escape')onCancel();}}
+        onBlur={(e)=>{const t=e.target.value;if(t.trim())onCommit(t);else onCancel();}}
+        onChange={(e)=>{e.target.style.height='auto';e.target.style.height=e.target.scrollHeight+'px';}}/>
     );
   }
 
-  // ─── Color Wheel ─────────────────────────────────────────
-  function ColorWheel({ activeColor, onChange, size = 60 }) {
-    const canvasRef = useRef(null);
-    useEffect(() => {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      const r = size/2;
-      const img = ctx.createImageData(size, size);
-      for (let y=0; y<size; y++) {
-        for (let x=0; x<size; x++) {
-          const dx=x-r, dy=y-r, dist=Math.hypot(dx,dy);
-          if (dist <= r) {
-            const h = ((Math.atan2(dy,dx)*180/Math.PI)+360)%360;
-            const s = dist/r;
-            const [R,G,B] = hslToRgb(h/360, s, 0.5);
-            const i = (y*size+x)*4;
-            img.data[i]=R; img.data[i+1]=G; img.data[i+2]=B; img.data[i+3]=255;
-          }
+  // ─── ColorWheel ───────────────────────────────────────────
+  function ColorWheel({activeColor,onChange,size=110}){
+    const canvasRef=useRef(null);
+    useEffect(()=>{
+      const canvas=canvasRef.current, ctx=canvas.getContext('2d'), r=size/2;
+      const img=ctx.createImageData(size,size);
+      for(let y=0;y<size;y++){for(let x=0;x<size;x++){
+        const dx=x-r,dy=y-r,dist=Math.hypot(dx,dy);
+        if(dist<=r){
+          const h=((Math.atan2(dy,dx)*180/Math.PI)+360)%360, s=dist/r;
+          const [R,G,B]=hslToRgb(h/360,s,0.5);
+          const i=(y*size+x)*4; img.data[i]=R;img.data[i+1]=G;img.data[i+2]=B;img.data[i+3]=255;
         }
-      }
-      ctx.putImageData(img, 0, 0);
-    }, [size]);
-
-    const pick = (e) => {
-      const rect = canvasRef.current.getBoundingClientRect();
-      const x = Math.min(size-1,Math.max(0,Math.round((e.clientX-rect.left)*size/rect.width)));
-      const y = Math.min(size-1,Math.max(0,Math.round((e.clientY-rect.top)*size/rect.height)));
-      const p = canvasRef.current.getContext('2d').getImageData(x,y,1,1).data;
-      if (p[3]===0) return;
+      }}
+      ctx.putImageData(img,0,0);
+    },[size]);
+    const pick=(e)=>{
+      const rect=canvasRef.current.getBoundingClientRect();
+      const x=Math.min(size-1,Math.max(0,Math.round((e.clientX-rect.left)*size/rect.width)));
+      const y=Math.min(size-1,Math.max(0,Math.round((e.clientY-rect.top)*size/rect.height)));
+      const p=canvasRef.current.getContext('2d').getImageData(x,y,1,1).data;
+      if(p[3]===0) return;
       onChange('#'+[p[0],p[1],p[2]].map(v=>v.toString(16).padStart(2,'0')).join(''));
     };
-
-    return (
-      <div style={{ position:'relative', width:size, height:size, flexShrink:0 }}>
+    return(
+      <div style={{position:'relative',width:size,height:size,flexShrink:0}}>
         <canvas ref={canvasRef} width={size} height={size}
-          style={{ borderRadius:'50%', cursor:'crosshair', display:'block',
-                   boxShadow:'0 2px 12px rgba(0,0,0,0.18)' }}
-          onPointerDown={pick}
-          onPointerMove={(e) => { if(e.buttons===1) pick(e); }} />
-        <div style={{
-          position:'absolute', width:20, height:20, borderRadius:'50%',
-          background:activeColor, border:'2.5px solid white',
-          boxShadow:'0 1px 6px rgba(0,0,0,0.3)',
-          top:'50%', left:'50%', transform:'translate(-50%,-50%)',
-          pointerEvents:'none',
-        }} />
+          style={{borderRadius:'50%',cursor:'crosshair',display:'block',boxShadow:'0 2px 12px rgba(0,0,0,0.15)'}}
+          onPointerDown={pick} onPointerMove={(e)=>{if(e.buttons===1)pick(e);}}/>
+        <div style={{position:'absolute',width:22,height:22,borderRadius:'50%',background:activeColor,
+          border:'3px solid white',boxShadow:'0 1px 6px rgba(0,0,0,0.25)',
+          top:'50%',left:'50%',transform:'translate(-50%,-50%)',pointerEvents:'none'}}/>
       </div>
     );
   }
 
-  // ─── SVG Tool Icons ───────────────────────────────────────
+  // ─── Tool SVGs (white-bodied, colored accents) ────────────
+  // stroke color for all outlines
+  const S = '#c8c8c8';
 
-  function EraserSVG({ active }) {
-    return (
-      <svg width="28" height="40" viewBox="0 0 28 40" fill="none">
-        <rect x="3" y="2" width="22" height="31" rx="2.5" fill={active ? '#f0e8ec' : '#f7f3f5'} />
-        <rect x="3" y="2" width="22" height="10" rx="2.5" fill={active ? '#e8dae0' : '#efe8ec'} />
-        <rect x="3" y="28" width="22" height="5" rx="1" fill="#f0afc0" />
-        <text x="14" y="22" textAnchor="middle" fontSize="5" fontFamily="Arial" fontWeight="700"
-              fill="#d0a0b0" letterSpacing="0.8">AVAN</text>
-        <rect x="5.5" y="3" width="3" height="29" rx="1.5" fill="rgba(255,255,255,0.55)" />
-      </svg>
-    );
-  }
-
-  function PenSVG({ active }) {
-    const body = active ? '#2a2a2a' : '#3a3a3a';
-    return (
-      <svg width="22" height="82" viewBox="0 0 22 82" fill="none">
-        {/* Flat top cap */}
-        <rect x="7" y="2" width="8" height="5" rx="2.5" fill="#c0bdb8" />
-        {/* Body */}
-        <rect x="6.5" y="7" width="9" height="42" rx="1.5" fill={body} />
-        {/* Gold clip */}
-        <rect x="14.5" y="6" width="2" height="35" rx="1" fill="#d4a840" />
-        <circle cx="15.5" cy="40" r="1.5" fill="#c89830" />
-        {/* Brand line */}
-        <rect x="6.5" y="32" width="9" height="1" fill="rgba(255,255,255,0.12)" />
-        {/* Grip section */}
-        <rect x="6.5" y="49" width="9" height="12" rx="1" fill="#222" />
-        {/* Transition ring */}
-        <rect x="6" y="60" width="10" height="3" rx="1" fill="#999" />
-        {/* Nib */}
-        <path d="M6.5 63 L11 80 L15.5 63 Z" fill="#aaa" />
-        <line x1="11" y1="65" x2="11" y2="79" stroke="#888" strokeWidth="0.6" />
-        {/* Highlight */}
-        <rect x="8" y="8" width="1.5" height="40" rx="0.75" fill="rgba(255,255,255,0.1)" />
-      </svg>
-    );
-  }
-
-  function PencilSVG({ active, activeColor }) {
-    const tipColor = activeColor || '#e8c0bc';
-    return (
-      <svg width="22" height="84" viewBox="0 0 22 84" fill="none">
-        {/* Graphite tip */}
-        <polygon points="11,0 14.5,16 7.5,16" fill="#5a5a5a" />
-        {/* Wood cone */}
-        <polygon points="11,13 14.5,22 7.5,22" fill="#c8a060" />
-        {/* Main hex body */}
-        <rect x="7" y="22" width="8" height="42" fill={active ? '#ede870' : '#f5f080'} />
-        {/* Hex face shadow */}
-        <polygon points="7,22 7,64 9,64 9,22" fill="rgba(0,0,0,0.07)" />
-        <polygon points="15,22 15,64 13,64 13,22" fill="rgba(0,0,0,0.07)" />
-        {/* Label band */}
-        <rect x="7" y="37" width="8" height="9" fill={active ? '#e0dc60' : '#ede870'} />
-        {/* Ferrule */}
-        <rect x="6" y="64" width="10" height="5" rx="0.5" fill="#b8b0a0" />
-        {/* Eraser with active color */}
-        <rect x="7" y="69" width="8" height="12" rx="1.5" fill={tipColor} />
-        {/* Highlight */}
-        <rect x="8.5" y="23" width="1.2" height="40" rx="0.6" fill="rgba(255,255,255,0.5)" />
-      </svg>
-    );
-  }
-
-  function MarkerSVG({ active }) {
-    return (
-      <svg width="26" height="82" viewBox="0 0 26 82" fill="none">
-        {/* Rounded cap */}
-        <rect x="8" y="2" width="10" height="7" rx="3.5" fill={active ? '#1a1a1a' : '#252525'} />
-        {/* Body */}
-        <rect x="7" y="9" width="12" height="46" rx="2" fill={active ? '#181818' : '#202020'} />
-        {/* Color band */}
-        <rect x="7" y="30" width="12" height="10" rx="0" fill="#c85820" />
-        {/* Lower body */}
-        <rect x="7.5" y="55" width="11" height="5" rx="1" fill="#333" />
-        {/* Nib taper */}
-        <path d="M7.5 60 Q7.5 62 9.5 64 L13 65.5 L16.5 64 Q18.5 62 18.5 60 Z" fill="#888" />
-        {/* Chisel tip */}
-        <rect x="9" y="64" width="8" height="14" rx="1.5" fill="#aaa" />
-        {/* Highlight */}
-        <rect x="9" y="10" width="2" height="44" rx="1" fill="rgba(255,255,255,0.09)" />
-      </svg>
-    );
-  }
-
-  function FinelineSVG({ active }) {
-    return (
-      <svg width="18" height="80" viewBox="0 0 18 80" fill="none">
-        {/* Cap - rounded top */}
-        <rect x="5.5" y="2" width="7" height="28" rx="3.5" fill={active ? '#28283a' : '#32324a'} />
-        {/* Cap clip */}
-        <rect x="11.5" y="5" width="1.2" height="22" rx="0.6" fill="rgba(255,255,255,0.2)" />
-        {/* Body */}
-        <rect x="5.5" y="30" width="7" height="28" rx="1" fill={active ? '#303045' : '#3a3a55'} />
-        {/* Color accent band */}
-        <rect x="5.5" y="40" width="7" height="4" rx="0" fill="#3a90d8" />
-        {/* Ferrule */}
-        <rect x="6" y="57" width="6" height="5" rx="0.5" fill="#9a9a9a" />
-        {/* Fine tip */}
-        <path d="M7.5 62 L9 79 L10.5 62 Z" fill="#888" />
-        {/* Highlight */}
-        <rect x="7" y="3" width="1.2" height="26" rx="0.6" fill="rgba(255,255,255,0.15)" />
-      </svg>
-    );
-  }
-
-  function BrushSVG({ active }) {
+  function FineLineSVG({ color }) {
     return (
       <svg width="20" height="84" viewBox="0 0 20 84" fill="none">
-        {/* Handle - wood */}
-        <rect x="8" y="2" width="4" height="48" rx="2" fill={active ? '#cda870' : '#d8b880'} />
-        {/* Wood grain */}
-        <line x1="8.5" y1="14" x2="11.5" y2="14" stroke="rgba(0,0,0,0.09)" strokeWidth="0.5"/>
-        <line x1="8.5" y1="24" x2="11.5" y2="24" stroke="rgba(0,0,0,0.09)" strokeWidth="0.5"/>
-        <line x1="8.5" y1="34" x2="11.5" y2="34" stroke="rgba(0,0,0,0.09)" strokeWidth="0.5"/>
-        <line x1="8.5" y1="44" x2="11.5" y2="44" stroke="rgba(0,0,0,0.09)" strokeWidth="0.5"/>
-        {/* Ferrule */}
-        <rect x="7" y="50" width="6" height="8" rx="1" fill="#b8b0a0" />
-        {/* Bristle head */}
-        <ellipse cx="10" cy="66" rx="4" ry="8" fill="#1e1a16" />
-        {/* Bristle highlight */}
-        <ellipse cx="9" cy="64" rx="1.2" ry="4" fill="rgba(255,255,255,0.12)" />
-        {/* Fine tip */}
-        <ellipse cx="10" cy="74" rx="1.5" ry="2.5" fill="#141210" />
-        {/* Handle highlight */}
-        <rect x="9" y="3" width="1" height="46" rx="0.5" fill="rgba(255,255,255,0.45)" />
+        {/* Body – rounded cap top, straight sides */}
+        <rect x="5.5" y="2" width="9" height="56" rx="4.5" fill="white" stroke={S} strokeWidth="1.4"/>
+        {/* Subtle grip ring */}
+        <rect x="5.5" y="46" width="9" height="3" fill="#ececec"/>
+        {/* Colour band */}
+        <rect x="5.5" y="49" width="9" height="7" fill={color}/>
+        {/* Nozzle section */}
+        <rect x="7"   y="58" width="6" height="9" rx="2" fill="white" stroke={S} strokeWidth="1.2"/>
+        {/* Fine nib */}
+        <path d="M9 67 L10 82 L11 67" fill={color}/>
       </svg>
     );
   }
 
-  function WatercolorSVG({ active }) {
+  function HighlighterSVG({ color }) {
+    return (
+      <svg width="28" height="82" viewBox="0 0 28 82" fill="none">
+        {/* Body */}
+        <rect x="5" y="2" width="18" height="52" rx="5" fill="white" stroke={S} strokeWidth="1.4"/>
+        {/* Grip ring */}
+        <rect x="5" y="43" width="18" height="3" fill="#ececec"/>
+        {/* Colour band */}
+        <rect x="5" y="46" width="18" height="8" fill={color}/>
+        {/* Chisel-tip housing */}
+        <rect x="5" y="54" width="18" height="11" rx="2" fill="white" stroke={S} strokeWidth="1.2"/>
+        {/* Chisel tip — flat angled wedge */}
+        <path d="M5 65 L14 74 L23 65 Z" fill={color}/>
+      </svg>
+    );
+  }
+
+  function ThickMarkerSVG({ color }) {
+    return (
+      <svg width="36" height="90" viewBox="0 0 36 90" fill="none">
+        {/* Body */}
+        <rect x="4" y="2" width="28" height="58" rx="6" fill="white" stroke={S} strokeWidth="1.4"/>
+        {/* Centre dot / ink window */}
+        <circle cx="18" cy="34" r="6" fill={color}/>
+        {/* Colour band */}
+        <rect x="4" y="50" width="28" height="8" fill={color}/>
+        {/* Nib block */}
+        <rect x="7" y="60" width="22" height="16" rx="4" fill={color}/>
+        {/* Rounded nib end */}
+        <ellipse cx="18" cy="76" rx="9" ry="5" fill={color}/>
+      </svg>
+    );
+  }
+
+  function ColorPencilSVG({ color }) {
     return (
       <svg width="22" height="84" viewBox="0 0 22 84" fill="none">
-        {/* Handle - lighter */}
-        <rect x="9" y="2" width="4" height="48" rx="2" fill={active ? '#dfc090' : '#ecd0a0'} />
-        {/* Grain */}
-        <line x1="9.5" y1="16" x2="12.5" y2="16" stroke="rgba(0,0,0,0.07)" strokeWidth="0.5"/>
-        <line x1="9.5" y1="28" x2="12.5" y2="28" stroke="rgba(0,0,0,0.07)" strokeWidth="0.5"/>
-        <line x1="9.5" y1="40" x2="12.5" y2="40" stroke="rgba(0,0,0,0.07)" strokeWidth="0.5"/>
-        {/* Ferrule - wider */}
-        <rect x="7.5" y="50" width="7" height="8" rx="1" fill="#c8c0b0" />
-        {/* Bristle - softer, rounder */}
-        <ellipse cx="11" cy="65" rx="5.5" ry="8" fill="#4a3c2e" />
-        {/* Soft highlight */}
-        <ellipse cx="10" cy="63" rx="2" ry="4.5" fill="rgba(255,255,255,0.13)" />
-        {/* Rounded tip */}
-        <ellipse cx="11" cy="73" rx="2.5" ry="3" fill="#2a1e14" />
-        {/* Handle highlight */}
-        <rect x="10" y="3" width="1" height="46" rx="0.5" fill="rgba(255,255,255,0.55)" />
+        {/* Hex body */}
+        <rect x="6" y="2" width="10" height="54" rx="3" fill="white" stroke={S} strokeWidth="1.4"/>
+        {/* Subtle facet shading */}
+        <rect x="6"  y="2" width="2.5" height="54" rx="1" fill="rgba(0,0,0,0.025)"/>
+        <rect x="13.5" y="2" width="2.5" height="54" rx="1" fill="rgba(0,0,0,0.025)"/>
+        {/* Wood taper */}
+        <path d="M6 56 L11 70 L16 56 Z" fill="#e6c278" stroke={S} strokeWidth="1"/>
+        {/* Coloured tip */}
+        <path d="M9.5 68 L11 82 L12.5 68 Z" fill={color}/>
       </svg>
     );
   }
 
-  function UndoSVG() {
+  function EraserToolSVG() {
     return (
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 7v6h6"/><path d="M3 13C5.5 6.5 12 4 17.5 6.5S22 15 18 19"/>
+      <svg width="28" height="62" viewBox="0 0 28 62" fill="none">
+        {/* Pink top cap */}
+        <rect x="4" y="2" width="20" height="20" rx="4" fill="#f4b8c8" stroke={S} strokeWidth="1.4"/>
+        {/* White body */}
+        <rect x="4" y="20" width="20" height="36" rx="2" fill="white" stroke={S} strokeWidth="1.4"/>
+        {/* Subtle bottom rubber strip */}
+        <rect x="4" y="48" width="20" height="8" rx="1.5" fill="#f0eaec" stroke={S} strokeWidth="1"/>
       </svg>
     );
   }
 
-  function RedoSVG() {
+  function KnifeToolSVG() {
     return (
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M21 7v6h-6"/><path d="M21 13C18.5 6.5 12 4 6.5 6.5S2 15 6 19"/>
+      <svg width="20" height="82" viewBox="0 0 20 82" fill="none">
+        {/* Handle */}
+        <rect x="7" y="2" width="8" height="50" rx="4" fill="white" stroke={S} strokeWidth="1.4"/>
+        {/* Guard / bolster */}
+        <rect x="4" y="50" width="14" height="7" rx="2" fill="#e0e0e0" stroke={S} strokeWidth="1.2"/>
+        {/* Blade – angled scalpel shape */}
+        <path d="M9 57 L9 78 L18 63 Z" fill="#d4d4d4" stroke="#b4b4b4" strokeWidth="1"/>
+        {/* Blade bevel highlight */}
+        <line x1="9.5" y1="59" x2="15.5" y2="64" stroke="rgba(255,255,255,0.9)" strokeWidth="1" strokeLinecap="round"/>
       </svg>
     );
   }
 
-  function DownloadSVG() {
-    return (
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none"
-           stroke="#aaa" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="3" y="3" width="18" height="18" rx="3"/>
-        <polyline points="8 12 12 16 16 12"/><line x1="12" y1="8" x2="12" y2="16"/>
-      </svg>
+  // map id → SVG component (icons are memo'd implicitly via static def)
+  const TOOL_SVG = {
+    'fineliner-red':    (c) => <FineLineSVG    color="#e03030"/>,
+    'fineliner-yellow': (c) => <FineLineSVG    color="#ddaa00"/>,
+    'highlighter-green':(c) => <HighlighterSVG color="#60d020"/>,
+    'highlighter-pink': (c) => <HighlighterSVG color="#e020c0"/>,
+    'marker-black':     (c) => <ThickMarkerSVG color="#111111"/>,
+    'pencil-purple':    (c) => <ColorPencilSVG color="#7030d8"/>,
+    'eraser':           (c) => <EraserToolSVG />,
+    'knife':            (c) => <KnifeToolSVG  />,
+  };
+
+  // ─── Toolbar ──────────────────────────────────────────────
+  function Toolbar({
+    activeToolId, onSelectTool,
+    activeColor, setActiveColor,
+    brushSize, setBrushSize,
+    onUndo, onRedo, onExport,
+    zoom, onResetZoom,
+    onTextAdd,
+  }) {
+    const [showWheel, setShowWheel] = useState(false);
+
+    // Close wheel when clicking outside
+    useEffect(() => {
+      if (!showWheel) return;
+      const close = (e) => {
+        if (!e.target.closest('[data-wheel-anchor]')) setShowWheel(false);
+      };
+      window.addEventListener('pointerdown', close, true);
+      return () => window.removeEventListener('pointerdown', close, true);
+    }, [showWheel]);
+
+    const circleBtn = (onClick, title, children, extraStyle={}) => (
+      <button onClick={onClick} title={title} className="icon-btn"
+        style={{ width:44, height:44, borderRadius:'50%', background:'#f0f0f0',
+                 display:'flex', alignItems:'center', justifyContent:'center',
+                 flexShrink:0, ...extraStyle }}>
+        {children}
+      </button>
     );
-  }
 
-  // ─── TopBar ───────────────────────────────────────────────
-  function TopBar({ onUndo, onRedo, onExport, zoom, onResetZoom }) {
     return (
-      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-5 py-4 z-10">
-        <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors" title="Back">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-               stroke="#aaa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="15 18 9 12 15 6"/>
-          </svg>
-        </button>
-        <div className="flex items-center gap-0.5">
-          <button onClick={onUndo} title="Undo (⌘Z)"
-            className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors text-[#aaa]">
-            <UndoSVG />
-          </button>
-          <button onClick={onRedo} title="Redo (⌘⇧Z)"
-            className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors text-[#aaa]">
-            <RedoSVG />
-          </button>
-          <button onClick={onResetZoom} title="Reset zoom"
-            className="h-7 px-2 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors text-xs font-mono text-[#bbb]"
-            style={{ minWidth:'44px' }}>
-            {Math.round(zoom*100)}%
-          </button>
-        </div>
-        <button onClick={onExport} title="Export PNG"
-          className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-black/5 transition-colors">
-          <DownloadSVG />
-        </button>
-      </div>
-    );
-  }
+      <div style={{ position:'absolute', bottom:36, left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
 
-  // ─── BottomToolbar ────────────────────────────────────────
-  const TOOLS = [
-    { id:'eraser',     Icon:EraserSVG,     label:'Eraser',     btnH:52 },
-    { id:'pen',        Icon:PenSVG,        label:'Pen',        btnH:88 },
-    { id:'pencil',     Icon:PencilSVG,     label:'Pencil',     btnH:88 },
-    { id:'marker',     Icon:MarkerSVG,     label:'Marker',     btnH:88 },
-    { id:'fineliner',  Icon:FinelineSVG,   label:'Fine liner', btnH:86 },
-    { id:'brush',      Icon:BrushSVG,      label:'Brush',      btnH:90 },
-    { id:'watercolor', Icon:WatercolorSVG, label:'Watercolor', btnH:90 },
-  ];
+        {/* ── Color-wheel popup (floats above toolbar) ── */}
+        {showWheel && (
+          <div data-wheel-anchor
+            style={{ position:'absolute', bottom:'calc(100% + 14px)', right:0,
+                     background:'white', borderRadius:20, padding:14,
+                     boxShadow:'0 8px 40px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08)',
+                     border:'1px solid rgba(0,0,0,0.07)',
+                     display:'flex', flexDirection:'column', alignItems:'center', gap:10 }}>
+            <ColorWheel activeColor={activeColor} onChange={setActiveColor} size={120}/>
+            {/* Brush size row inside popup */}
+            <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+              {[{id:'xs',d:5},{id:'sm',d:8},{id:'md',d:12},{id:'lg',d:17}].map(({id,d})=>(
+                <button key={id} onClick={()=>setBrushSize(id)}
+                  style={{ width:30, height:30, borderRadius:'50%',
+                           background:brushSize===id?'#f0f0f0':'transparent',
+                           display:'flex', alignItems:'center', justifyContent:'center',
+                           transition:'background 0.12s' }}>
+                  <div style={{ width:d, height:d, borderRadius:'50%',
+                                background:brushSize===id?'#333':'#bbb', transition:'background 0.12s' }}/>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-  const PILL_H = 58;
-
-  function BottomToolbar({ activeTool, setActiveTool, activeColor, setActiveColor, brushSize, setBrushSize }) {
-    return (
-      <div style={{ position:'absolute', bottom:32, left:'50%', transform:'translateX(-50%)', zIndex:20 }}>
-
-        {/* Pill background */}
+        {/* ── Main pill ── */}
         <div style={{
-          position:'absolute', bottom:0, left:0, right:0, height:PILL_H,
-          borderRadius:20,
-          background:'rgba(252,250,248,0.95)',
-          backdropFilter:'blur(24px)',
-          WebkitBackdropFilter:'blur(24px)',
-          boxShadow:'0 8px 48px rgba(0,0,0,0.13), 0 2px 8px rgba(0,0,0,0.08)',
-          border:'1px solid rgba(0,0,0,0.07)',
-        }} />
-
-        {/* Content row — flex-end so everything bottom-aligns */}
-        <div style={{
+          display:'flex', alignItems:'flex-end', gap:4,
+          padding:'10px 14px 10px',
+          borderRadius:50,
+          background:'white',
+          boxShadow:'0 4px 32px rgba(0,0,0,0.12), 0 1px 6px rgba(0,0,0,0.06)',
+          border:'1px solid rgba(0,0,0,0.06)',
           position:'relative',
-          display:'flex', alignItems:'flex-end',
-          padding:`0 14px ${(PILL_H-40)/2}px`,
-          gap:2,
         }}>
 
-          {/* Text tool — small circle, sits in pill */}
-          <button onClick={() => setActiveTool('text')} title="Text (T)"
-            style={{
-              width:34, height:34, borderRadius:'50%',
-              display:'flex', alignItems:'center', justifyContent:'center',
-              background: activeTool==='text' ? 'rgba(0,0,0,0.09)' : 'transparent',
-              flexShrink:0, marginBottom:0,
-              transition:'background 0.15s',
-            }}>
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-              <text x="9" y="14" textAnchor="middle" fontSize="14" fontFamily="Georgia,serif"
-                    fontWeight="700" fill={activeTool==='text' ? '#444' : '#888'}>T</text>
+          {/* LEFT — Undo / Redo */}
+          <div style={{ display:'flex', gap:6, alignItems:'center', paddingBottom:2, flexShrink:0 }}>
+            {circleBtn(onUndo, 'Undo (⌘Z)',
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#555" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7v6h6"/><path d="M3 13C5.5 6.5 12 4 17.5 6.5S22 15 18 19"/>
+              </svg>
+            )}
+            {circleBtn(onRedo, 'Redo (⌘⇧Z)',
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#555" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 7v6h-6"/><path d="M21 13C18.5 6.5 12 4 6.5 6.5S2 15 6 19"/>
+              </svg>
+            )}
+          </div>
+
+          {/* Spacer */}
+          <div style={{ width:6, flexShrink:0 }}/>
+
+          {/* CENTER — Tools */}
+          {TOOL_DEFS.map(({ id, label }) => {
+            const isActive = activeToolId === id;
+            return (
+              <button key={id}
+                className="tool-btn"
+                onClick={() => onSelectTool(id)}
+                onDoubleClick={() => { onSelectTool(id); setShowWheel(v => !v); }}
+                title={label + ' (double-click for colour)'}
+                style={{
+                  display:'flex', alignItems:'flex-end', justifyContent:'center',
+                  padding:'0 3px 6px',
+                  borderRadius:10,
+                  background: isActive ? 'rgba(0,0,0,0.05)' : 'transparent',
+                  transform: isActive ? 'translateY(-14px)' : 'translateY(0)',
+                  flexShrink:0,
+                }}>
+                {TOOL_SVG[id]()}
+              </button>
+            );
+          })}
+
+          {/* Spacer */}
+          <div style={{ width:6, flexShrink:0 }}/>
+
+          {/* RIGHT — Actions */}
+
+          {/* + / text */}
+          {circleBtn(onTextAdd, 'Add text (T)',
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#555" strokeWidth="2.4" strokeLinecap="round">
+              <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>,
+            { marginBottom:2 }
+          )}
+
+          {/* Thin divider */}
+          <div style={{ width:1, height:30, background:'#e4e4e4', margin:'0 4px', alignSelf:'center', flexShrink:0 }}/>
+
+          {/* Colour dot — toggles wheel, shows current colour */}
+          <button data-wheel-anchor onClick={()=>setShowWheel(v=>!v)}
+            title="Colour wheel (or double-click any pen)"
+            style={{ width:22, height:22, borderRadius:'50%',
+                     background:activeColor,
+                     border:'2.5px solid white',
+                     boxShadow: showWheel
+                       ? `0 0 0 2px ${activeColor}44, 0 2px 6px rgba(0,0,0,0.2)`
+                       : '0 0 0 1.5px rgba(0,0,0,0.13)',
+                     alignSelf:'center', flexShrink:0,
+                     transition:'box-shadow 0.15s' }}/>
+
+          {/* Shapes icon */}
+          <button title="Shapes" className="icon-btn"
+            style={{ width:44, height:44, display:'flex', alignItems:'center',
+                     justifyContent:'center', borderRadius:10, marginBottom:2, flexShrink:0 }}>
+            <svg width="24" height="22" viewBox="0 0 24 22" fill="none">
+              <polygon points="12,1 20.5,17 3.5,17" fill="none" stroke="#888" strokeWidth="1.8" strokeLinejoin="round"/>
+              <circle cx="5.5" cy="17" r="4" fill="#888"/>
+              <rect x="14" y="13" width="8" height="8" rx="1.5" fill="#888"/>
             </svg>
           </button>
 
-          {/* Divider */}
-          <div style={{ width:1, height:30, background:'rgba(0,0,0,0.09)', alignSelf:'flex-end', marginBottom:4, marginLeft:4, marginRight:4, flexShrink:0 }} />
+          {/* Download / Export */}
+          <button onClick={onExport} title="Export PNG" className="icon-btn"
+            style={{ width:44, height:44, display:'flex', alignItems:'center',
+                     justifyContent:'center', borderRadius:10, marginBottom:2, flexShrink:0 }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="#888" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="8 12 12 16 16 12"/>
+              <line x1="12" y1="7" x2="12" y2="16"/>
+              <line x1="4" y1="20" x2="20" y2="20"/>
+            </svg>
+          </button>
 
-          {/* Tool buttons */}
-          {TOOLS.map(({ id, Icon, label, btnH }) => (
-            <button key={id} onClick={() => setActiveTool(id)} title={label}
-              style={{
-                display:'flex', alignItems:'flex-end', justifyContent:'center',
-                width: id==='eraser' ? 36 : 30,
-                height: btnH,
-                paddingBottom:5,
-                borderRadius:12,
-                flexShrink:0,
-                background: activeTool===id ? 'rgba(0,0,0,0.07)' : 'transparent',
-                transition:'background 0.15s',
-              }}>
-              <Icon active={activeTool===id} activeColor={activeColor} />
-            </button>
-          ))}
+        </div>
 
-          {/* Divider */}
-          <div style={{ width:1, height:30, background:'rgba(0,0,0,0.09)', alignSelf:'flex-end', marginBottom:4, marginLeft:6, marginRight:6, flexShrink:0 }} />
-
-          {/* Color wheel */}
-          <div style={{ alignSelf:'flex-end', marginBottom:0, flexShrink:0 }}>
-            <ColorWheel activeColor={activeColor} onChange={setActiveColor} size={58} />
-          </div>
-
-          {/* Divider */}
-          <div style={{ width:1, height:30, background:'rgba(0,0,0,0.09)', alignSelf:'flex-end', marginBottom:4, marginLeft:8, marginRight:8, flexShrink:0 }} />
-
-          {/* Swatches — 2×3 circular grid */}
-          <div style={{
-            display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:6,
-            alignSelf:'flex-end', marginBottom:3, flexShrink:0,
-          }}>
-            {SWATCHES.map((hex, i) => (
-              <button key={i} onClick={() => setActiveColor(hex)}
-                style={{
-                  width:18, height:18, borderRadius:'50%', background:hex,
-                  outline: activeColor===hex ? '2px solid rgba(0,0,0,0.35)' : '1.5px solid rgba(0,0,0,0.1)',
-                  outlineOffset: activeColor===hex ? '1.5px' : '0',
-                  transition:'outline 0.1s',
-                }}
-              />
-            ))}
-          </div>
-
-          {/* Divider */}
-          <div style={{ width:1, height:30, background:'rgba(0,0,0,0.09)', alignSelf:'flex-end', marginBottom:4, marginLeft:8, marginRight:8, flexShrink:0 }} />
-
-          {/* Brush size — 4 dots in column */}
-          <div style={{
-            display:'flex', flexDirection:'column', alignItems:'center', gap:5,
-            alignSelf:'flex-end', marginBottom:5, flexShrink:0,
-          }}>
-            {[
-              { id:'xs', d:4 }, { id:'sm', d:7 }, { id:'md', d:11 }, { id:'lg', d:15 },
-            ].map(({ id, d }) => (
-              <button key={id} onClick={() => setBrushSize(id)} title={`Size: ${id}`}
-                style={{
-                  width:22, height:d+6, borderRadius:99,
-                  display:'flex', alignItems:'center', justifyContent:'center',
-                  background: brushSize===id ? 'rgba(0,0,0,0.08)' : 'transparent',
-                  transition:'background 0.15s',
-                }}>
-                <div style={{
-                  width:d, height:d, borderRadius:'50%',
-                  background: brushSize===id ? '#555' : '#ccc',
-                  transition:'background 0.15s',
-                }} />
-              </button>
-            ))}
-          </div>
-
+        {/* Subtle zoom chip below toolbar */}
+        <div style={{ display:'flex', justifyContent:'center', marginTop:6 }}>
+          <button onClick={onResetZoom}
+            style={{ fontSize:'11px', color:'rgba(0,0,0,0.3)', letterSpacing:'0.02em',
+                     padding:'2px 8px', borderRadius:99, background:'transparent',
+                     transition:'background 0.12s, color 0.12s' }}
+            onMouseEnter={e=>{e.currentTarget.style.background='rgba(0,0,0,0.07)'; e.currentTarget.style.color='rgba(0,0,0,0.55)';}}
+            onMouseLeave={e=>{e.currentTarget.style.background='transparent'; e.currentTarget.style.color='rgba(0,0,0,0.3)';}}>
+            {Math.round(zoom*100)}%
+          </button>
         </div>
       </div>
     );
@@ -684,13 +546,16 @@
 
   // ─── App ─────────────────────────────────────────────────
   function App() {
-    const [activeTool,  setActiveTool]  = useState('pencil');
-    const [activeColor, setActiveColor] = useState('#c73b5e');
-    const [brushSize,   setBrushSize]   = useState('sm');
-    const [zoom,        setZoom]        = useState(1);
-    const [pan,         setPan]         = useState({ x:0, y:0 });
-    const [textInput,   setTextInput]   = useState(null);
-    const [spaceHeld,   setSpaceHeld]   = useState(false);
+    const [activeToolId, setActiveToolId] = useState('marker-black');
+    const [activeColor,  setActiveColor]  = useState('#111111');
+    const [brushSize,    setBrushSize]    = useState('sm');
+    const [zoom,         setZoom]         = useState(1);
+    const [pan,          setPan]          = useState({ x:0, y:0 });
+    const [textInput,    setTextInput]    = useState(null);
+    const [spaceHeld,    setSpaceHeld]    = useState(false);
+
+    // derive canvas draw type from visual tool id
+    const activeTool = TOOL_DEFS.find(t => t.id === activeToolId)?.drawType || 'brush';
 
     const canvasRef      = useRef(null);
     const zoomRef        = useRef(1);
@@ -700,142 +565,146 @@
     const panStartRef    = useRef(null);
     const activeColorRef = useRef(activeColor);
 
-    useEffect(() => { zoomRef.current = zoom; }, [zoom]);
-    useEffect(() => { panRef.current = pan; }, [pan]);
-    useEffect(() => { activeColorRef.current = activeColor; }, [activeColor]);
+    useEffect(()=>{ zoomRef.current=zoom; },[zoom]);
+    useEffect(()=>{ panRef.current=pan; },[pan]);
+    useEffect(()=>{ activeColorRef.current=activeColor; },[activeColor]);
 
-    const saveSnapshot = useCallback(() => {
-      const canvas = canvasRef.current; if (!canvas) return;
-      const ctx = canvas.getContext('2d');
+    // ── History ──────────────────────────────────────────────
+    const saveSnapshot = useCallback(()=>{
+      const canvas=canvasRef.current; if(!canvas) return;
+      const ctx=canvas.getContext('2d');
       historyRef.current.push(ctx.getImageData(0,0,canvas.width,canvas.height));
-      futureRef.current = [];
-      if (historyRef.current.length > 50) historyRef.current.shift();
-    }, []);
-
-    const undo = useCallback(() => {
-      const canvas = canvasRef.current; if (!canvas || !historyRef.current.length) return;
-      const ctx = canvas.getContext('2d');
+      futureRef.current=[];
+      if(historyRef.current.length>50) historyRef.current.shift();
+    },[]);
+    const undo = useCallback(()=>{
+      const canvas=canvasRef.current; if(!canvas||!historyRef.current.length) return;
+      const ctx=canvas.getContext('2d');
       futureRef.current.push(ctx.getImageData(0,0,canvas.width,canvas.height));
-      ctx.putImageData(historyRef.current.pop(), 0, 0);
-    }, []);
-
-    const redo = useCallback(() => {
-      const canvas = canvasRef.current; if (!canvas || !futureRef.current.length) return;
-      const ctx = canvas.getContext('2d');
+      ctx.putImageData(historyRef.current.pop(),0,0);
+    },[]);
+    const redo = useCallback(()=>{
+      const canvas=canvasRef.current; if(!canvas||!futureRef.current.length) return;
+      const ctx=canvas.getContext('2d');
       historyRef.current.push(ctx.getImageData(0,0,canvas.width,canvas.height));
-      ctx.putImageData(futureRef.current.pop(), 0, 0);
-    }, []);
+      ctx.putImageData(futureRef.current.pop(),0,0);
+    },[]);
 
-    const exportPNG = useCallback(() => {
-      const canvas = canvasRef.current; if (!canvas) return;
-      const out = document.createElement('canvas');
-      out.width = canvas.width; out.height = canvas.height;
-      const ctx = out.getContext('2d');
-      ctx.fillStyle = '#eeece8'; ctx.fillRect(0,0,out.width,out.height);
-      ctx.drawImage(canvas, 0, 0);
-      const a = document.createElement('a');
-      a.download = 'drawing.png'; a.href = out.toDataURL('image/png'); a.click();
-    }, []);
+    // ── Export ───────────────────────────────────────────────
+    const exportPNG = useCallback(()=>{
+      const canvas=canvasRef.current; if(!canvas) return;
+      const out=document.createElement('canvas'); out.width=canvas.width; out.height=canvas.height;
+      const ctx=out.getContext('2d');
+      ctx.fillStyle='#eeecea'; ctx.fillRect(0,0,out.width,out.height); ctx.drawImage(canvas,0,0);
+      const a=document.createElement('a'); a.download='drawing.png'; a.href=out.toDataURL('image/png'); a.click();
+    },[]);
 
-    useEffect(() => {
-      const onKeyDown = (e) => {
-        if (e.target.matches('textarea,input')) return;
-        if (e.code==='Space') { e.preventDefault(); setSpaceHeld(true); }
-        if ((e.metaKey||e.ctrlKey) && e.key==='z' && !e.shiftKey) { e.preventDefault(); undo(); }
-        if ((e.metaKey||e.ctrlKey) && e.key==='z' &&  e.shiftKey) { e.preventDefault(); redo(); }
-        if ((e.metaKey||e.ctrlKey) && e.key==='y')                { e.preventDefault(); redo(); }
+    // ── Keyboard ─────────────────────────────────────────────
+    useEffect(()=>{
+      const down=(e)=>{
+        if(e.target.matches('textarea,input')) return;
+        if(e.code==='Space'){e.preventDefault();setSpaceHeld(true);}
+        if((e.metaKey||e.ctrlKey)&&e.key==='z'&&!e.shiftKey){e.preventDefault();undo();}
+        if((e.metaKey||e.ctrlKey)&&e.key==='z'&& e.shiftKey){e.preventDefault();redo();}
+        if((e.metaKey||e.ctrlKey)&&e.key==='y'){e.preventDefault();redo();}
       };
-      const onKeyUp = (e) => { if (e.code==='Space') setSpaceHeld(false); };
-      window.addEventListener('keydown', onKeyDown);
-      window.addEventListener('keyup',   onKeyUp);
-      return () => { window.removeEventListener('keydown',onKeyDown); window.removeEventListener('keyup',onKeyUp); };
-    }, [undo, redo]);
+      const up=(e)=>{ if(e.code==='Space') setSpaceHeld(false); };
+      window.addEventListener('keydown',down); window.addEventListener('keyup',up);
+      return()=>{window.removeEventListener('keydown',down); window.removeEventListener('keyup',up);};
+    },[undo,redo]);
 
-    useEffect(() => {
-      const handleWheel = (e) => {
+    // ── Wheel zoom ───────────────────────────────────────────
+    useEffect(()=>{
+      const handleWheel=(e)=>{
         e.preventDefault();
-        const delta = e.deltaY * (e.ctrlKey ? 0.04 : 0.0015);
-        const newZoom = Math.min(Math.max(zoomRef.current*(1-delta), 0.1), 10);
-        const p = panRef.current;
-        const ratio = newZoom / zoomRef.current;
-        const newPan = { x: e.clientX-(e.clientX-p.x)*ratio, y: e.clientY-(e.clientY-p.y)*ratio };
-        zoomRef.current = newZoom; panRef.current = newPan;
-        setZoom(newZoom); setPan(newPan);
+        const delta=e.deltaY*(e.ctrlKey?0.04:0.0015);
+        const newZoom=Math.min(Math.max(zoomRef.current*(1-delta),0.1),10);
+        const p=panRef.current, ratio=newZoom/zoomRef.current;
+        const newPan={x:e.clientX-(e.clientX-p.x)*ratio, y:e.clientY-(e.clientY-p.y)*ratio};
+        zoomRef.current=newZoom; panRef.current=newPan; setZoom(newZoom); setPan(newPan);
       };
-      const el = document.getElementById('root');
-      el.addEventListener('wheel', handleWheel, { passive:false });
-      return () => el.removeEventListener('wheel', handleWheel);
-    }, []);
+      document.getElementById('root').addEventListener('wheel',handleWheel,{passive:false});
+      return()=>document.getElementById('root').removeEventListener('wheel',handleWheel);
+    },[]);
 
-    const onPanStart = useCallback((e) => {
-      panStartRef.current = { clientX:e.clientX, clientY:e.clientY, panX:panRef.current.x, panY:panRef.current.y };
+    // ── Pan ──────────────────────────────────────────────────
+    const onPanStart=useCallback((e)=>{
+      panStartRef.current={clientX:e.clientX,clientY:e.clientY,panX:panRef.current.x,panY:panRef.current.y};
       e.currentTarget.setPointerCapture(e.pointerId);
-    }, []);
-    const onPanMove = useCallback((e) => {
-      if (!panStartRef.current) return;
-      const dx = e.clientX-panStartRef.current.clientX, dy = e.clientY-panStartRef.current.clientY;
-      const newPan = { x:panStartRef.current.panX+dx, y:panStartRef.current.panY+dy };
-      panRef.current = newPan; setPan(newPan);
-    }, []);
-    const onPanEnd = useCallback(() => { panStartRef.current=null; }, []);
+    },[]);
+    const onPanMove=useCallback((e)=>{
+      if(!panStartRef.current) return;
+      const dx=e.clientX-panStartRef.current.clientX, dy=e.clientY-panStartRef.current.clientY;
+      const newPan={x:panStartRef.current.panX+dx, y:panStartRef.current.panY+dy};
+      panRef.current=newPan; setPan(newPan);
+    },[]);
+    const onPanEnd=useCallback(()=>{panStartRef.current=null;},[]);
 
-    const onTextClick = useCallback((canvasX, canvasY, screenX, screenY) => {
-      setTextInput({ canvasX, canvasY, screenX, screenY });
-    }, []);
-
-    const commitText = useCallback((text) => {
-      if (!textInput) return;
-      const canvas = canvasRef.current, ctx = canvas.getContext('2d');
+    // ── Text ─────────────────────────────────────────────────
+    const onTextClick=useCallback((canvasX,canvasY,screenX,screenY)=>{
+      setTextInput({canvasX,canvasY,screenX,screenY});
+    },[]);
+    const commitText=useCallback((text)=>{
+      if(!textInput) return;
+      const canvas=canvasRef.current, ctx=canvas.getContext('2d');
       saveSnapshot();
-      ctx.save();
-      ctx.font = '18px Georgia, serif';
-      ctx.fillStyle = activeColorRef.current;
-      ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
-      text.split('\n').forEach((line, i) => ctx.fillText(line, textInput.canvasX, textInput.canvasY + i*18*1.4));
-      ctx.restore();
-      setTextInput(null);
-    }, [textInput, saveSnapshot]);
+      ctx.save(); ctx.font='18px Georgia,serif'; ctx.fillStyle=activeColorRef.current;
+      ctx.globalAlpha=1; ctx.globalCompositeOperation='source-over';
+      text.split('\n').forEach((line,i)=>ctx.fillText(line,textInput.canvasX,textInput.canvasY+i*18*1.4));
+      ctx.restore(); setTextInput(null);
+    },[textInput,saveSnapshot]);
 
-    const resetZoom = useCallback(() => {
+    // ── Select tool (sets colour preset) ────────────────────
+    const selectTool=(id)=>{
+      setActiveToolId(id);
+      const def=TOOL_DEFS.find(t=>t.id===id);
+      if(def&&def.color) setActiveColor(def.color);
+    };
+
+    const resetZoom=useCallback(()=>{
       zoomRef.current=1; panRef.current={x:0,y:0}; setZoom(1); setPan({x:0,y:0});
-    }, []);
+    },[]);
 
     return (
-      <div className="relative w-screen h-screen overflow-hidden select-none"
-        style={{
-          backgroundColor:'#eeece8',
-          backgroundImage:'radial-gradient(circle, #c8c3ba 1.2px, transparent 1.2px)',
-          backgroundSize:`${24*zoom}px ${24*zoom}px`,
-          backgroundPosition:`${pan.x}px ${pan.y}px`,
-          cursor: spaceHeld ? (panStartRef.current ? 'grabbing' : 'grab') : 'default',
-        }}>
+      <div style={{
+        position:'relative', width:'100vw', height:'100vh', overflow:'hidden', userSelect:'none',
+        backgroundColor:'#eeecea',
+        backgroundImage:'radial-gradient(circle, #c8c3ba 1.2px, transparent 1.2px)',
+        backgroundSize:`${24*zoom}px ${24*zoom}px`,
+        backgroundPosition:`${pan.x}px ${pan.y}px`,
+        cursor: spaceHeld ? (panStartRef.current?'grabbing':'grab') : 'default',
+      }}>
 
-        <div style={{
-          position:'absolute', inset:0,
-          transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,
-          transformOrigin:'0 0',
-        }}>
+        {/* Canvas transform layer */}
+        <div style={{ position:'absolute', inset:0,
+                      transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,
+                      transformOrigin:'0 0' }}>
           <WatercolorCanvas ref={canvasRef}
             activeTool={activeTool} activeColor={activeColor} brushSize={brushSize}
-            zoomRef={zoomRef} saveSnapshot={saveSnapshot} onTextClick={onTextClick} />
+            zoomRef={zoomRef} saveSnapshot={saveSnapshot} onTextClick={onTextClick}/>
         </div>
 
+        {/* Pan overlay (space-hold) */}
         {spaceHeld && (
-          <div style={{ position:'fixed', inset:0, zIndex:50, cursor:panStartRef.current?'grabbing':'grab' }}
-            onPointerDown={onPanStart} onPointerMove={onPanMove} onPointerUp={onPanEnd} />
+          <div style={{position:'fixed',inset:0,zIndex:50,cursor:panStartRef.current?'grabbing':'grab'}}
+            onPointerDown={onPanStart} onPointerMove={onPanMove} onPointerUp={onPanEnd}/>
         )}
 
+        {/* Text input overlay */}
         {textInput && (
           <TextOverlay screenX={textInput.screenX} screenY={textInput.screenY}
-            color={activeColor} zoom={zoom} onCommit={commitText} onCancel={() => setTextInput(null)} />
+            color={activeColor} zoom={zoom} onCommit={commitText} onCancel={()=>setTextInput(null)}/>
         )}
 
-        <TopBar onUndo={undo} onRedo={redo} onExport={exportPNG} zoom={zoom} onResetZoom={resetZoom} />
-
-        <BottomToolbar
-          activeTool={activeTool}   setActiveTool={setActiveTool}
-          activeColor={activeColor} setActiveColor={setActiveColor}
-          brushSize={brushSize}     setBrushSize={setBrushSize} />
+        {/* Toolbar */}
+        <Toolbar
+          activeToolId={activeToolId} onSelectTool={selectTool}
+          activeColor={activeColor}   setActiveColor={setActiveColor}
+          brushSize={brushSize}       setBrushSize={setBrushSize}
+          onUndo={undo} onRedo={redo} onExport={exportPNG}
+          zoom={zoom}   onResetZoom={resetZoom}
+          onTextAdd={()=>{ setActiveToolId('text-internal'); }}
+        />
       </div>
     );
   }
