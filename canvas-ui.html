@@ -86,15 +86,13 @@
   }
 
   // ─── useWatercolorCanvas ──────────────────────────────────
-  function useWatercolorCanvas(canvasRef, { activeTool, activeColor, brushSize, zoomRef, saveSnapshot, onTextClick, onStrokeEnd }) {
+  function useWatercolorCanvas(canvasRef, { activeTool, activeColor, brushSize, zoomRef, saveSnapshot, onTextClick }) {
     const toolRef=useRef(activeTool), colorRef=useRef(activeColor), sizeRef=useRef(brushSize);
     useEffect(()=>{toolRef.current=activeTool;},[activeTool]);
     useEffect(()=>{colorRef.current=activeColor;},[activeColor]);
     useEffect(()=>{sizeRef.current=brushSize;},[brushSize]);
-    const onStrokeEndRef=useRef(onStrokeEnd);
-    useEffect(()=>{ onStrokeEndRef.current=onStrokeEnd; },[onStrokeEnd]);
     const blobPool=useRef(new Map());
-    const ds=useRef({isDrawing:false,positions:[],lastStampPos:null,lastLinePos:null,allStrokePoints:[]});
+    const ds=useRef({isDrawing:false,positions:[],lastStampPos:null,lastLinePos:null});
 
     useEffect(()=>{
       const canvas=canvasRef.current; if(!canvas) return;
@@ -159,8 +157,6 @@
       const pos=getPos(e), rgb=hexToRgb(colorRef.current), ctx=canvasRef.current.getContext('2d');
       ds.current.isDrawing=true; ds.current.positions=[pos];
       ds.current.lastStampPos={x:pos.x,y:pos.y}; ds.current.lastLinePos={x:pos.x,y:pos.y};
-      if(ds.current.allStrokePoints.length>0) ds.current.allStrokePoints.push(null);
-      ds.current.allStrokePoints.push(pos);
       if(LINE_TOOLS.has(tool)){
         const {lw,alpha}=getLineStyle(tool);
         ctx.save(); ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=alpha;
@@ -175,7 +171,6 @@
       if(!ds.current.isDrawing) return;
       const pos=getPos(e), pts=ds.current.positions;
       pts.push(pos); if(pts.length>8) pts.shift();
-      ds.current.allStrokePoints.push(pos);
       const tool=toolRef.current, rgb=hexToRgb(colorRef.current), ctx=canvasRef.current.getContext('2d');
       if(LINE_TOOLS.has(tool)){
         drawLine(ctx,ds.current.lastLinePos,pos,rgb,tool);
@@ -199,18 +194,13 @@
         }
       }
     },[]);
-    const onPointerUp=useCallback(()=>{
-      if(ds.current.isDrawing) onStrokeEndRef.current?.([...ds.current.allStrokePoints]);
-      ds.current.isDrawing=false; ds.current.positions=[];
-    },[]);
-    const clearStrokePoints=useCallback(()=>{ ds.current.allStrokePoints=[]; },[]);
-    return {onPointerDown,onPointerMove,onPointerUp,clearStrokePoints};
+    const onPointerUp=useCallback(()=>{ds.current.isDrawing=false; ds.current.positions=[];},[]);
+    return {onPointerDown,onPointerMove,onPointerUp};
   }
 
   // ─── WatercolorCanvas ─────────────────────────────────────
-  const WatercolorCanvas=forwardRef(function WatercolorCanvas({activeTool,activeColor,brushSize,zoomRef,saveSnapshot,onTextClick,onStrokeEnd,opsRef},canvasRef){
-    const {onPointerDown,onPointerMove,onPointerUp,clearStrokePoints}=useWatercolorCanvas(canvasRef,{activeTool,activeColor,brushSize,zoomRef,saveSnapshot,onTextClick,onStrokeEnd});
-    useEffect(()=>{ if(opsRef) opsRef.current={clearStrokePoints}; },[opsRef,clearStrokePoints]);
+  const WatercolorCanvas=forwardRef(function WatercolorCanvas({activeTool,activeColor,brushSize,zoomRef,saveSnapshot,onTextClick},canvasRef){
+    const {onPointerDown,onPointerMove,onPointerUp}=useWatercolorCanvas(canvasRef,{activeTool,activeColor,brushSize,zoomRef,saveSnapshot,onTextClick});
     const cursor=activeTool==='eraser'?'cell':activeTool==='text'?'text':'crosshair';
     return(
       <canvas ref={canvasRef} style={{position:'absolute',inset:0,width:'100%',height:'100%',display:'block',background:'transparent',mixBlendMode:'multiply',cursor,touchAction:'none'}}
@@ -550,99 +540,6 @@
     'eraser': () => <EraserToolSVG />,
   };
 
-  // ─── Icon Generation ─────────────────────────────────────
-  function getBoundingBox(points) {
-    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-    for(const p of points){ if(p===null) continue; if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; }
-    return {minX,minY,maxX,maxY,w:maxX-minX,h:maxY-minY};
-  }
-  function normalizePoints(points,iconSize=24,padding=2){
-    const bb=getBoundingBox(points);
-    if(bb.w===0&&bb.h===0) return points;
-    const drawable=iconSize-padding*2, scale=Math.min(drawable/Math.max(bb.w,1),drawable/Math.max(bb.h,1));
-    const offX=padding+(drawable-bb.w*scale)/2, offY=padding+(drawable-bb.h*scale)/2;
-    return points.map(p=>p===null?null:{x:(p.x-bb.minX)*scale+offX,y:(p.y-bb.minY)*scale+offY});
-  }
-  function smoothPoints(points,iterations=2){
-    let pts=points;
-    for(let iter=0;iter<iterations;iter++){
-      const result=[]; let seg=[];
-      const flush=(s)=>{
-        if(s.length<2){result.push(...s);return;}
-        result.push(s[0]);
-        for(let i=0;i<s.length-1;i++){
-          const a=s[i],b=s[i+1];
-          result.push({x:a.x*0.75+b.x*0.25,y:a.y*0.75+b.y*0.25});
-          result.push({x:a.x*0.25+b.x*0.75,y:a.y*0.25+b.y*0.75});
-        }
-        result.push(s[s.length-1]);
-      };
-      for(const p of pts){ if(p===null){flush(seg);seg=[];result.push(null);}else seg.push(p); }
-      if(seg.length>0) flush(seg);
-      pts=result;
-    }
-    return pts;
-  }
-  function renderIcon(normalizedPoints,{size=24,lineWidth=1.5,color='#111111',background='white',smooth=true}={}){
-    const pts=smooth?smoothPoints(normalizedPoints):normalizedPoints;
-    const cv=document.createElement('canvas'); cv.width=size; cv.height=size;
-    const ctx=cv.getContext('2d');
-    ctx.fillStyle=background; ctx.fillRect(0,0,size,size);
-    ctx.strokeStyle=color; ctx.lineWidth=lineWidth; ctx.lineCap='round'; ctx.lineJoin='round';
-    let inStroke=false; ctx.beginPath();
-    for(const p of pts){
-      if(p===null){ctx.stroke();ctx.beginPath();inStroke=false;}
-      else if(!inStroke){ctx.moveTo(p.x,p.y);inStroke=true;}
-      else{ctx.lineTo(p.x,p.y);}
-    }
-    ctx.stroke();
-    return cv.toDataURL('image/png');
-  }
-  function convertToIcon(points,options={}){
-    if(!points||points.length===0) return null;
-    const real=points.filter(p=>p!==null); if(real.length<2) return null;
-    return renderIcon(normalizePoints(points,options.size||24,options.padding||2),options);
-  }
-
-  // ─── IconPreview ──────────────────────────────────────────
-  function IconPreview({dataUrl,onReplace,onDismiss}){
-    const [copied,setCopied]=useState(false);
-    if(!dataUrl) return null;
-    const copy=async()=>{
-      try{
-        const blob=await fetch(dataUrl).then(r=>r.blob());
-        await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
-      }catch{
-        await navigator.clipboard.writeText(dataUrl);
-      }
-      setCopied(true); setTimeout(()=>setCopied(false),1500);
-    };
-    return(
-      <div style={{position:'fixed',top:24,right:24,zIndex:100,background:'white',borderRadius:16,
-        boxShadow:'0 8px 32px rgba(0,0,0,0.14),0 2px 8px rgba(0,0,0,0.08)',
-        border:'1px solid rgba(0,0,0,0.06)',padding:12,display:'flex',
-        flexDirection:'column',gap:8,alignItems:'center'}}>
-        <div style={{fontSize:10,color:'rgba(0,0,0,0.4)',fontFamily:'system-ui',
-          letterSpacing:'0.04em',textTransform:'uppercase'}}>Icon Preview</div>
-        <img src={dataUrl} width={96} height={96}
-          style={{imageRendering:'pixelated',borderRadius:8,border:'1px solid rgba(0,0,0,0.08)',cursor:'pointer'}}
-          onClick={onReplace} title="Click to replace drawing with this icon"/>
-        <div style={{display:'flex',gap:6}}>
-          <button onClick={onReplace}
-            style={{fontSize:11,fontFamily:'system-ui',padding:'4px 10px',borderRadius:8,
-              background:'#111',color:'white',border:'none',cursor:'pointer'}}>Replace</button>
-          <button onClick={copy}
-            style={{fontSize:11,fontFamily:'system-ui',padding:'4px 10px',borderRadius:8,
-              background:'rgba(0,0,0,0.07)',color:'#111',border:'none',cursor:'pointer'}}>
-            {copied?'✓ Copied':'Copy'}</button>
-          <button onClick={onDismiss}
-            style={{fontSize:11,fontFamily:'system-ui',padding:'4px 10px',borderRadius:8,
-              background:'rgba(0,0,0,0.05)',color:'#888',border:'none',cursor:'pointer'}}>×</button>
-        </div>
-      </div>
-    );
-  }
-
   // ─── Toolbar ──────────────────────────────────────────────
   function Toolbar({
     activeToolId, onSelectTool,
@@ -834,7 +731,6 @@
     const [pan,          setPan]          = useState({ x:0, y:0 });
     const [textInput,    setTextInput]    = useState(null);
     const [spaceHeld,    setSpaceHeld]    = useState(false);
-    const [iconDataUrl,  setIconDataUrl]  = useState(null);
 
     // derive canvas draw type from visual tool id
     const activeTool = TOOL_DEFS.find(t => t.id === activeToolId)?.drawType || 'brush';
@@ -846,31 +742,10 @@
     const futureRef      = useRef([]);
     const panStartRef    = useRef(null);
     const activeColorRef = useRef(activeColor);
-    const strokeOpsRef   = useRef({ clearStrokePoints: null });
 
     useEffect(()=>{ zoomRef.current=zoom; },[zoom]);
     useEffect(()=>{ panRef.current=pan; },[pan]);
     useEffect(()=>{ activeColorRef.current=activeColor; },[activeColor]);
-
-    // ── Stroke end → icon generation ────────────────────────
-    const onStrokeEnd=useCallback((points)=>{
-      const dataUrl=convertToIcon(points,{size:24,padding:2,color:activeColorRef.current,background:'white'});
-      if(dataUrl) setIconDataUrl(dataUrl);
-    },[]);
-    const replaceWithIcon=useCallback(()=>{
-      if(!iconDataUrl||!canvasRef.current) return;
-      const canvas=canvasRef.current, ctx=canvas.getContext('2d');
-      saveSnapshot(); ctx.clearRect(0,0,canvas.width,canvas.height);
-      const img=new Image();
-      img.onload=()=>{
-        const s=Math.min(canvas.width,canvas.height)*0.5;
-        const x=(canvas.width-s)/2, y=(canvas.height-s)/2;
-        ctx.imageSmoothingEnabled=false; ctx.drawImage(img,x,y,s,s);
-      };
-      img.src=iconDataUrl;
-      setIconDataUrl(null);
-      strokeOpsRef.current?.clearStrokePoints?.();
-    },[iconDataUrl,saveSnapshot]);
 
     // ── History ──────────────────────────────────────────────
     const saveSnapshot = useCallback(()=>{
@@ -984,8 +859,7 @@
                       transformOrigin:'0 0' }}>
           <WatercolorCanvas ref={canvasRef}
             activeTool={activeTool} activeColor={activeColor} brushSize={brushSize}
-            zoomRef={zoomRef} saveSnapshot={saveSnapshot} onTextClick={onTextClick}
-            onStrokeEnd={onStrokeEnd} opsRef={strokeOpsRef}/>
+            zoomRef={zoomRef} saveSnapshot={saveSnapshot} onTextClick={onTextClick}/>
         </div>
 
         {/* Pan overlay (space-hold) */}
@@ -998,11 +872,6 @@
         {textInput && (
           <TextOverlay screenX={textInput.screenX} screenY={textInput.screenY}
             color={activeColor} zoom={zoom} onCommit={commitText} onCancel={()=>setTextInput(null)}/>
-        )}
-
-        {/* Icon preview */}
-        {iconDataUrl && (
-          <IconPreview dataUrl={iconDataUrl} onReplace={replaceWithIcon} onDismiss={()=>setIconDataUrl(null)}/>
         )}
 
         {/* Toolbar */}
