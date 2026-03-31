@@ -624,13 +624,15 @@
                 title={label}
                 style={{
                   display:'flex',
-                  alignItems: 'flex-end',
-                  justifyContent:'center',
-                  padding: isActive ? '8px 6px 8px' : '0 6px 8px',
+                  flexDirection:'column',
+                  alignItems: 'center',
+                  justifyContent:'flex-end',
+                  padding: '0 6px 8px',
+                  paddingTop: isActive ? 24 : 0,
                   borderRadius: 9999,
                   background: isActive ? 'rgba(0,0,0,0.06)' : 'transparent',
-                  alignSelf: isActive ? 'stretch' : 'flex-end',
-                  transition:'background 0.15s',
+                  alignSelf: 'flex-end',
+                  transition:'background 0.15s, padding-top 0.2s cubic-bezier(0.34,1.56,0.64,1)',
                   flexShrink:0,
                 }}>
                 {TOOL_SVG[id]()}
