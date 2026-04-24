@@ -1,53 +1,68 @@
 # Drawing Canvas UI
 
-A lightweight, browser-based drawing canvas with a physical instrument toolbar. Built with React, HTML Canvas, and Tailwind CSS — no build step required.
+A lightweight, single-file drawing canvas with a physical instrument toolbar — inspired by iPadOS. No build step, no dependencies to install. Open the HTML file and draw.
 
-## Features
+![Full canvas view](screenshots/canvas-full.png)
 
-### Toolbar
+---
 
-| Section | What's there |
+## Toolbar
+
+![Toolbar close-up](screenshots/toolbar-closeup.png)
+
+The floating pill toolbar sits at the bottom of the canvas and mirrors the Figma iPadOS / LightMode design. From left to right:
+
+| Section | Controls |
 |---|---|
-| **T** | Text tool — click anywhere on the canvas to place editable text, `Enter` to commit, `Esc` to cancel |
-| **Tools** | Eraser, Pen, Pencil, Marker, Fine liner, Brush, Watercolor — all rendered as physical SVG instruments floating above the bar |
-| **Color wheel** | Full HSL wheel — click or drag to pick any color, current color shown as center dot |
-| **Swatches** | 6 circular presets in a 2×3 grid (navy, purple, crimson, gray, cyan, off-white) |
-| **Size** | 4 dot sizes stacked vertically on the far right |
+| **History** | Undo (↺) and Redo (↻) buttons |
+| **Tools** | Pen · Marker · Pencil · Eraser — rendered as physical Figma SVG instruments |
+| **Palette** | 5 colour presets + a rainbow colour-wheel picker |
+| **More (⋯)** | Export canvas as PNG |
 
-### Drawing Tools
+---
 
-| Tool | Behavior |
+## Drawing Tools
+
+![Multi-colour drawing](screenshots/canvas-multicolor.png)
+
+| Tool | Character |
 |---|---|
-| **Pen** | Smooth, thin strokes — full opacity |
-| **Pencil** | Slightly textured line with natural feel |
-| **Marker** | Wide, semi-transparent strokes that layer |
-| **Fine liner** | Razor-thin, crisp, full opacity |
-| **Brush** | Medium width with pressure response |
-| **Watercolor** | Organic pigment-blob stamps — velocity-sensitive |
+| **Pen** | Thin, full-opacity line — precise freehand strokes |
+| **Marker** | Wide, semi-transparent strokes that layer naturally |
+| **Pencil** | Medium weight with a soft, natural feel |
 | **Eraser** | Removes paint, reveals the paper background |
 
-### Canvas Controls
+---
 
-| Control | How |
+## Canvas Controls
+
+| Action | How |
 |---|---|
-| **Undo** | `⌘Z` or the ↺ button in the top bar |
-| **Redo** | `⌘⇧Z` or the ↻ button |
-| **Zoom** | Scroll wheel (toward cursor) |
+| **Undo** | `⌘Z` or the ↺ button |
+| **Redo** | `⌘⇧Z` / `⌘Y` or the ↻ button |
+| **Zoom** | Scroll wheel (zooms toward cursor) |
 | **Pan** | Hold `Space` + drag |
-| **Reset zoom** | Click the `100%` indicator in the top bar |
-| **Export PNG** | Download button (top right) — composites paper background + drawing |
+| **Reset zoom** | Click the `100%` chip below the toolbar |
+| **Export PNG** | Click `⋯` — composites paper background + drawing |
+
+---
 
 ## Stack
 
-- React 18 (UMD, no build step)
-- HTML5 Canvas API
-- Tailwind CSS (CDN)
-- Babel Standalone (in-browser JSX)
+- **React 18** — UMD build, no bundler needed
+- **HTML5 Canvas API** — all drawing is pixel-level
+- **Tailwind CSS** — CDN, utility classes for layout only
+- **Babel Standalone** — in-browser JSX compilation
+- **Single file** — everything lives in `canvas-ui.html`
 
-## Running locally
+---
+
+## Run locally
 
 ```bash
 python3 -m http.server 8080
 ```
 
-Then open `http://localhost:8080/canvas-ui.html`.
+Open `http://localhost:8080/canvas-ui.html` in your browser.
+
+> **Tip:** Use a stylus or drawing tablet for the most natural feel. The canvas reads hardware pressure via the Pointer Events API when available.
